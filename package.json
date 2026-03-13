@@ -1,0 +1,36 @@
+{
+  "name": "discord-video-stream",
+  "version": "0.1.0",
+  "description": "Discord video streaming userbot CLI with DAVE support and Effect",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "discord-stream": "./dist/src/index.js"
+  },
+  "engines": {
+    "node": ">=22 <24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@lng2004/node-datachannel": "0.32.0-20260202",
+    "node-av": "^5.2.2",
+    "effect": "^3.19.0",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "tsx": "^4.19.0"
+  }
+}
