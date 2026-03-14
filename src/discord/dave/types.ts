@@ -24,6 +24,7 @@ export interface DaveSessionInstance {
   GetProtocolVersion(): number;
   SetExternalSender(externalSender: number[]): void;
   GetMarshalledKeyPackage(): number[];
+  GetLastEpochAuthenticator(): number[];
   ProcessProposals(proposals: number[], recognizedUserIds: string[]): number[] | null;
   ProcessCommit(commit: number[]): {
     ignored: boolean;
@@ -38,6 +39,8 @@ export interface DaveEncryptorInstance {
   AssignSsrcToCodec(ssrc: number, codec: number): void;
   SetKeyRatchet(keyRatchet: DaveKeyRatchet | null): void;
   SetPassthroughMode(passthrough: boolean): void;
+  GetProtocolVersion(): number;
+  SetProtocolVersionChangedCallback(callback: (version: number) => void): void;
   GetMaxCiphertextByteSize(mediaType: number, plaintextSize: number): number;
   Encrypt(
     mediaType: number,
@@ -56,7 +59,7 @@ export interface DaveModule {
   ) => DaveSessionInstance;
   Encryptor: new () => DaveEncryptorInstance;
   TransientKeys: new () => DaveTransientKeys;
-  Codec: { Opus: number; H264: number; VP8: number; VP9: number; H265: number; AV1: number };
+  Codec: { Unknown: number; Opus: number; H264: number; VP8: number; VP9: number; H265: number; AV1: number };
   MediaType: { Audio: number; Video: number };
   MaxSupportedProtocolVersion(): number;
   _malloc(size: number): number;

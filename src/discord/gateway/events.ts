@@ -29,6 +29,9 @@ export type GatewayStreamCreate = GatewayEventGeneric<
     stream_key: string;
     rtc_server_id: string;
     rtc_channel_id: string;
+    region?: string;
+    viewer_ids?: string[];
+    paused?: boolean;
   }
 >;
 
@@ -45,7 +48,7 @@ export type GatewayStreamDelete = GatewayEventGeneric<
   'STREAM_DELETE',
   {
     stream_key: string;
-    reason?: string;
+    reason: string;
     unavailable?: boolean;
   }
 >;

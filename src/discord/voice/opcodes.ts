@@ -8,8 +8,8 @@ export enum VoiceOpcode {
   Ready = 2,
   /** Send/Receive: Keep the websocket connection alive */
   Heartbeat = 3,
-  /** Receive: Acknowledge SelectProtocol, includes SDP answer */
-  SelectProtocolAck = 4,
+  /** Receive: Describe the session — officially "Session Description" in Discord docs */
+  SessionDescription = 4,
   /** Send/Receive: Indicate which users are speaking */
   Speaking = 5,
   /** Receive: Heartbeat acknowledged */
@@ -22,10 +22,16 @@ export enum VoiceOpcode {
   Resumed = 9,
   /** Receive: Users connected to the voice channel */
   ClientsConnect = 11,
-  /** Send: Video stream descriptor update */
+  /** Send: Video stream descriptor update (undocumented) */
   Video = 12,
   /** Receive: A user disconnected from voice */
   ClientDisconnect = 13,
+  /** Send/Receive: Session update */
+  SessionUpdate = 14,
+  /** Send/Receive: Media sink wants (simulcast preferences) */
+  MediaSinkWants = 15,
+  /** Send/Receive: Voice backend version */
+  VoiceBackendVersion = 16,
   /** Receive: DAVE — prepare protocol version transition */
   DavePrepareTransition = 21,
   /** Receive: DAVE — execute protocol version transition */
@@ -34,7 +40,7 @@ export enum VoiceOpcode {
   DaveTransitionReady = 23,
   /** Receive: DAVE — prepare new MLS epoch */
   DavePrepareEpoch = 24,
-  /** Receive: DAVE — invalid commit/welcome marker */
+  /** Send: DAVE — flag invalid commit/welcome (C→S) */
   MlsInvalidCommitWelcome = 31,
 }
 

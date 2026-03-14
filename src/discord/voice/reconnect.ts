@@ -25,9 +25,23 @@ export function classifyVoiceCloseCode(code: number): CloseClassification {
     return 'resume';
   }
 
+  // 4006: Session no longer valid — need fresh connection
+  // 4009: Session timeout — need fresh connection
   if (code === 4006 || code === 4009) {
     return 'refresh';
   }
 
+  // Explicitly fatal codes include:
+  // 4001: Unknown opcode
+  // 4002: Failed to decode payload
+  // 4003: Not authenticated
+  // 4004: Authentication failed
+  // 4005: Already authenticated
+  // 4007: Invalid seq
+  // 4011: Server not found
+  // 4012: Unknown protocol
+  // 4014: Disconnected
+  // 4016: Unknown encryption mode
+  // 4021: Channel was deleted
   return 'fatal';
 }

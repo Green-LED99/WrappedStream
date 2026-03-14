@@ -434,7 +434,7 @@ export abstract class BaseMediaConnection extends EventEmitter {
       case VoiceOpcode.Ready:
         await this.handleReady(payload.d);
         break;
-      case VoiceOpcode.SelectProtocolAck:
+      case VoiceOpcode.SessionDescription:
         await this.handleSelectProtocolAck(payload.d);
         break;
       case VoiceOpcode.HeartbeatAck:

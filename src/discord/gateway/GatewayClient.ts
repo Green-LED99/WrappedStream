@@ -479,7 +479,6 @@ export class GatewayClient {
       properties: {
         os: platformName(process.platform),
         browser: 'Discord Client',
-        device: 'Discord Client',
         system_locale: locale,
         client_launch_id: this.clientLaunchId,
         client_heartbeat_session_id: this.clientHeartbeatSessionId,
@@ -881,13 +880,32 @@ function isSupportedGatewayEvent(eventType: string, data: unknown): boolean {
 function classifyGatewayCloseCode(code: number): GatewayCloseClassification {
   if (code < 4_000) return 'resume';
   switch (code) {
+    // 4000: Unknown error — reconnectable
     case 4_000:
+    // 4001: Unknown opcode — reconnectable
+    case 4_001:
+    // 4002: Decode error — reconnectable
+    case 4_002:
+    // 4003: Not authenticated — reconnectable
+    case 4_003:
+    // 4005: Already authenticated — reconnectable
+    case 4_005:
+    // 4008: Rate limited — reconnectable
+    case 4_008:
       return 'resume';
+    // 4004: Authentication failed — invalid token
     case 4_004:
       return 'auth';
+    // 4007: Invalid seq — must re-identify
     case 4_007:
+    // 4009: Session timed out — must re-identify
     case 4_009:
       return 'identify';
+    // 4010: Invalid shard
+    // 4011: Sharding required
+    // 4012: Invalid API version
+    // 4013: Invalid intent(s)
+    // 4014: Disallowed intent(s)
     default:
       return 'fatal';
   }
