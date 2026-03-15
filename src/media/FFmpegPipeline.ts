@@ -31,41 +31,37 @@ export function buildFfmpegNutArgs(url: string, plan: TranscodePlan): string[] {
     args.push('-an');
   }
 
-  if (plan.video.mode === 'copy') {
-    args.push('-c:v', 'copy');
-  } else {
-    args.push(
-      '-threads:v',
-      String(plan.video.threads),
-      '-c:v',
-      'libx264',
-      '-preset',
-      'superfast',
-      '-tune',
-      'zerolatency',
-      '-pix_fmt',
-      'yuv420p'
-    );
+  args.push(
+    '-threads:v',
+    String(plan.video.threads),
+    '-c:v',
+    'libx264',
+    '-preset',
+    'fast',
+    '-tune',
+    'zerolatency',
+    '-pix_fmt',
+    'yuv420p'
+  );
 
-    if (plan.video.filters.length > 0) {
-      args.push('-vf', plan.video.filters.join(','));
-    }
-
-    args.push(
-      '-r',
-      String(plan.video.targetFps),
-      '-b:v',
-      `${plan.video.targetBitrateKbps}k`,
-      '-maxrate:v',
-      `${plan.video.maxBitrateKbps}k`,
-      '-bufsize:v',
-      `${plan.video.targetBitrateKbps}k`,
-      '-bf',
-      '0',
-      '-force_key_frames',
-      'expr:gte(t,n_forced*1)'
-    );
+  if (plan.video.filters.length > 0) {
+    args.push('-vf', plan.video.filters.join(','));
   }
+
+  args.push(
+    '-r',
+    String(plan.video.targetFps),
+    '-b:v',
+    `${plan.video.targetBitrateKbps}k`,
+    '-maxrate:v',
+    `${plan.video.maxBitrateKbps}k`,
+    '-bufsize:v',
+    `${plan.video.targetBitrateKbps}k`,
+    '-bf',
+    '0',
+    '-force_key_frames',
+    'expr:gte(t,n_forced*1)'
+  );
 
   if (!plan.audio) {
     args.push('-f', 'nut', 'pipe:1');

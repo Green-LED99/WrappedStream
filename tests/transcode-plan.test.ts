@@ -78,7 +78,7 @@ describe('selectTranscodePlan', () => {
     expect(plan.usesTranscode).toBe(true);
   });
 
-  it('selects copy for 720p H264 at 24fps', () => {
+  it('always transcodes even for 720p H264 at 24fps', () => {
     const plan = selectTranscodePlan(
       makeProbe({
         videoCodec: 'h264',
@@ -89,17 +89,17 @@ describe('selectTranscodePlan', () => {
         audioChannels: 2,
       })
     );
-    expect(plan.video.mode).toBe('copy');
+    expect(plan.video.mode).toBe('transcode');
   });
 
-  it('selects transcode for VP9 source', () => {
+  it('always transcodes VP9 source', () => {
     const plan = selectTranscodePlan(
       makeProbe({ videoCodec: 'vp9', videoHeight: 480, videoFps: '24/1' })
     );
     expect(plan.video.mode).toBe('transcode');
   });
 
-  it('selects copy for 480p H264 at 24fps (under target)', () => {
+  it('always transcodes 480p H264 (under target)', () => {
     const plan = selectTranscodePlan(
       makeProbe({
         videoCodec: 'h264',
@@ -107,7 +107,7 @@ describe('selectTranscodePlan', () => {
         videoFps: '24/1',
       })
     );
-    expect(plan.video.mode).toBe('copy');
+    expect(plan.video.mode).toBe('transcode');
   });
 
   it('selects transcode for H264 over target fps', () => {
@@ -160,7 +160,7 @@ describe('selectTranscodePlan', () => {
     expect(plan.audio).toBeUndefined();
   });
 
-  it('adds scale filter when height differs from target', () => {
+  it('adds scale filter when height exceeds target', () => {
     const plan = selectTranscodePlan(
       makeProbe({
         videoCodec: 'vp9',
@@ -170,6 +170,21 @@ describe('selectTranscodePlan', () => {
     );
     if (plan.video.mode === 'transcode') {
       expect(plan.video.filters).toContain(
+        `scale=-2:${LOW_CPU_TARGET_HEIGHT}`
+      );
+    }
+  });
+
+  it('does not add scale filter when height is at or below target', () => {
+    const plan = selectTranscodePlan(
+      makeProbe({
+        videoCodec: 'h264',
+        videoHeight: 480,
+        videoFps: '24/1',
+      })
+    );
+    if (plan.video.mode === 'transcode') {
+      expect(plan.video.filters).not.toContain(
         `scale=-2:${LOW_CPU_TARGET_HEIGHT}`
       );
     }

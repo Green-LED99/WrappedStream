@@ -1,34 +1,27 @@
 import type { FfprobeResult, FfprobeStream } from './Probe.js';
 
 export const LOW_CPU_TARGET_HEIGHT = 720;
-export const LOW_CPU_TARGET_FPS = 24;
-export const LOW_CPU_VIDEO_TARGET_BITRATE_KBPS = 1800;
-export const LOW_CPU_VIDEO_MAX_BITRATE_KBPS = 3500;
+export const LOW_CPU_TARGET_FPS = 30;
+export const LOW_CPU_VIDEO_TARGET_BITRATE_KBPS = 2500;
+export const LOW_CPU_VIDEO_MAX_BITRATE_KBPS = 4500;
 export const LOW_CPU_VIDEO_THREADS = 2;
 export const LOW_CPU_AUDIO_BITRATE_KBPS = 128;
 export const LOW_CPU_AUDIO_SAMPLE_RATE = 48_000;
 export const LOW_CPU_AUDIO_CHANNELS = 2;
 
-export type VideoPlan =
-  | {
-      mode: 'copy';
-      sourceCodec: string;
-      sourceHeight: number;
-      sourceFps: number;
-    }
-  | {
-      mode: 'transcode';
-      sourceCodec: string;
-      sourceHeight: number;
-      sourceFps: number;
-      targetCodec: 'h264';
-      targetHeight: typeof LOW_CPU_TARGET_HEIGHT;
-      targetFps: typeof LOW_CPU_TARGET_FPS;
-      targetBitrateKbps: typeof LOW_CPU_VIDEO_TARGET_BITRATE_KBPS;
-      maxBitrateKbps: typeof LOW_CPU_VIDEO_MAX_BITRATE_KBPS;
-      threads: typeof LOW_CPU_VIDEO_THREADS;
-      filters: string[];
-    };
+export type VideoPlan = {
+  mode: 'transcode';
+  sourceCodec: string;
+  sourceHeight: number;
+  sourceFps: number;
+  targetCodec: 'h264';
+  targetHeight: typeof LOW_CPU_TARGET_HEIGHT;
+  targetFps: typeof LOW_CPU_TARGET_FPS;
+  targetBitrateKbps: typeof LOW_CPU_VIDEO_TARGET_BITRATE_KBPS;
+  maxBitrateKbps: typeof LOW_CPU_VIDEO_MAX_BITRATE_KBPS;
+  threads: typeof LOW_CPU_VIDEO_THREADS;
+  filters: string[];
+};
 
 export type AudioPlan =
   | {
@@ -77,15 +70,12 @@ export function selectTranscodePlan(probe: FfprobeResult): TranscodePlan {
   const videoSourceCodec = normalizeCodec(videoStream.codec_name);
   const videoSourceHeight = videoStream.height ?? 0;
   const videoSourceFps = parseFrameRate(videoStream.avg_frame_rate);
-  const videoCanCopy =
-    videoSourceCodec === 'h264' &&
-    videoSourceHeight > 0 &&
-    videoSourceHeight <= LOW_CPU_TARGET_HEIGHT &&
-    videoSourceFps > 0 &&
-    videoSourceFps <= LOW_CPU_TARGET_FPS;
 
+  // Always transcode video to enforce a hard 720p 30fps cap across the
+  // board.  Even if the source is already H.264 at or below the target,
+  // re-encoding guarantees consistent framing and bitrate control.
   const videoFilters: string[] = [];
-  if (videoSourceHeight !== LOW_CPU_TARGET_HEIGHT) {
+  if (videoSourceHeight > LOW_CPU_TARGET_HEIGHT || videoSourceHeight === 0) {
     videoFilters.push(`scale=-2:${LOW_CPU_TARGET_HEIGHT}`);
   }
 
@@ -93,26 +83,19 @@ export function selectTranscodePlan(probe: FfprobeResult): TranscodePlan {
     videoFilters.push(`fps=${LOW_CPU_TARGET_FPS}`);
   }
 
-  const video: VideoPlan = videoCanCopy
-    ? {
-        mode: 'copy',
-        sourceCodec: videoSourceCodec,
-        sourceHeight: videoSourceHeight,
-        sourceFps: videoSourceFps,
-      }
-    : {
-        mode: 'transcode',
-        sourceCodec: videoSourceCodec,
-        sourceHeight: videoSourceHeight,
-        sourceFps: videoSourceFps,
-        targetCodec: 'h264',
-        targetHeight: LOW_CPU_TARGET_HEIGHT,
-        targetFps: LOW_CPU_TARGET_FPS,
-        targetBitrateKbps: LOW_CPU_VIDEO_TARGET_BITRATE_KBPS,
-        maxBitrateKbps: LOW_CPU_VIDEO_MAX_BITRATE_KBPS,
-        threads: LOW_CPU_VIDEO_THREADS,
-        filters: videoFilters,
-      };
+  const video: VideoPlan = {
+    mode: 'transcode',
+    sourceCodec: videoSourceCodec,
+    sourceHeight: videoSourceHeight,
+    sourceFps: videoSourceFps,
+    targetCodec: 'h264',
+    targetHeight: LOW_CPU_TARGET_HEIGHT,
+    targetFps: LOW_CPU_TARGET_FPS,
+    targetBitrateKbps: LOW_CPU_VIDEO_TARGET_BITRATE_KBPS,
+    maxBitrateKbps: LOW_CPU_VIDEO_MAX_BITRATE_KBPS,
+    threads: LOW_CPU_VIDEO_THREADS,
+    filters: videoFilters,
+  };
 
   const audio = audioStream ? selectAudioPlan(audioStream) : undefined;
 
@@ -131,17 +114,13 @@ export function describeTranscodePlan(plan: TranscodePlan): Record<string, unkno
       sourceCodec: plan.video.sourceCodec,
       sourceHeight: plan.video.sourceHeight,
       sourceFps: plan.video.sourceFps,
-      ...(plan.video.mode === 'transcode'
-        ? {
-            targetCodec: plan.video.targetCodec,
-            targetHeight: plan.video.targetHeight,
-            targetFps: plan.video.targetFps,
-            targetBitrateKbps: plan.video.targetBitrateKbps,
-            maxBitrateKbps: plan.video.maxBitrateKbps,
-            threads: plan.video.threads,
-            filters: plan.video.filters,
-          }
-        : {}),
+      targetCodec: plan.video.targetCodec,
+      targetHeight: plan.video.targetHeight,
+      targetFps: plan.video.targetFps,
+      targetBitrateKbps: plan.video.targetBitrateKbps,
+      maxBitrateKbps: plan.video.maxBitrateKbps,
+      threads: plan.video.threads,
+      filters: plan.video.filters,
     },
     audio: plan.audio
       ? {
