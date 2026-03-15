@@ -203,18 +203,11 @@ export class Streamer implements VoiceGatewayCallbacks {
     return this.streamConnection;
   }
 
-  public signalVideo(enabled: boolean): void {
-    if (!this.voiceConnection) {
-      return;
-    }
-
-    this.session.sendGatewayOpcode(GatewayOpcode.VoiceStateUpdate, {
-      guild_id: this.voiceConnection.guildId,
-      channel_id: this.voiceConnection.channelId,
-      self_mute: false,
-      self_deaf: true,
-      self_video: enabled,
-    });
+  public signalVideo(_enabled: boolean): void {
+    // Go Live streams are managed via STREAM_CREATE / STREAM_SERVER_UPDATE,
+    // NOT via the self_video flag in VoiceStateUpdate.  Setting self_video to
+    // true would additionally turn on the bot's camera, which is undesirable.
+    // We therefore intentionally leave self_video: false here.
   }
 
   public handleConnectionRecoveryRequested(

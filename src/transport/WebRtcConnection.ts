@@ -86,36 +86,81 @@ export class WebRtcConnection {
     return this.peerConnection?.state?.() === 'connected';
   }
 
+  private audioFrameCount = 0;
+  private videoFrameCount = 0;
+  private lastReadyLog = 0;
+
   public sendAudioFrame(frame: Uint8Array, frameTimeMs: number): void {
-    if (!this.ready || !this.audioPacketizer) return;
+    if (!this.ready || !this.audioPacketizer) {
+      if (Date.now() - this.lastReadyLog > 5000) {
+        this.logger.debug('sendAudioFrame skipped', {
+          peerState: this.peerConnection?.state?.() ?? 'no-pc',
+          ready: this.ready,
+          hasPacketizer: !!this.audioPacketizer,
+        });
+        this.lastReadyLog = Date.now();
+      }
+      return;
+    }
 
     const packetizer = this.audioPacketizer;
     const rtpConfig = packetizer.rtpConfig;
 
     const encryptor = this.getDaveEncryptor();
-    const payload =
-      this.isDaveReady() && encryptor
-        ? encryptor.encryptAudio(frame, this.getAudioSsrc())
-        : frame;
+    const daveReady = this.isDaveReady();
+    const payload = daveReady && encryptor
+      ? encryptor.encryptAudio(frame, this.getAudioSsrc())
+      : frame;
 
     this.audioTrack?.sendMessageBinary(asSendBuffer(payload));
     rtpConfig.timestamp += Math.round((frameTimeMs * rtpConfig.clockRate) / 1000);
+
+    this.audioFrameCount += 1;
+    if (this.audioFrameCount <= 3 || this.audioFrameCount % 500 === 0) {
+      this.logger.debug('Audio frame sent', {
+        count: this.audioFrameCount,
+        bytes: payload.byteLength,
+        daveEncrypted: daveReady && !!encryptor,
+        keyRatchetReady: encryptor?.keyRatchetReady ?? false,
+      });
+    }
   }
 
   public sendVideoFrame(frame: Uint8Array, frameTimeMs: number): void {
-    if (!this.ready || !this.videoPacketizer) return;
+    if (!this.ready || !this.videoPacketizer) {
+      if (Date.now() - this.lastReadyLog > 5000) {
+        this.logger.debug('sendVideoFrame skipped', {
+          peerState: this.peerConnection?.state?.() ?? 'no-pc',
+          ready: this.ready,
+          hasPacketizer: !!this.videoPacketizer,
+        });
+        this.lastReadyLog = Date.now();
+      }
+      return;
+    }
 
     const packetizer = this.videoPacketizer;
     const rtpConfig = packetizer.rtpConfig;
 
     const encryptor = this.getDaveEncryptor();
-    const payload =
-      this.isDaveReady() && encryptor
-        ? encryptor.encryptVideo(frame, this.getVideoSsrc())
-        : frame;
+    const daveReady = this.isDaveReady();
+    const payload = daveReady && encryptor
+      ? encryptor.encryptVideo(frame, this.getVideoSsrc())
+      : frame;
 
     this.videoTrack?.sendMessageBinary(asSendBuffer(payload));
     rtpConfig.timestamp += Math.round((frameTimeMs * rtpConfig.clockRate) / 1000);
+
+    this.videoFrameCount += 1;
+    if (this.videoFrameCount <= 3 || this.videoFrameCount % 200 === 0) {
+      this.logger.debug('Video frame sent', {
+        count: this.videoFrameCount,
+        bytes: payload.byteLength,
+        daveEncrypted: daveReady && !!encryptor,
+        keyRatchetReady: encryptor?.keyRatchetReady ?? false,
+        frameTimeMs,
+      });
+    }
   }
 
   public async setPacketizer(
@@ -152,6 +197,12 @@ export class WebRtcConnection {
     this.videoPacketizer.addToChain(new rtc.RtcpSrReporter(videoRtpConfig));
     this.videoPacketizer.addToChain(new rtc.RtcpNackResponder());
     this.videoPacketizer.addToChain(new rtc.PacingHandler(25 * 1000 * 1000, 1));
+
+    const encryptor = this.getDaveEncryptor();
+    if (encryptor) {
+      encryptor.assignOpusSsrc(params.audioSsrc);
+      encryptor.assignH264Ssrc(params.videoSsrc);
+    }
 
     this.setMediaHandler();
     this.logger.debug('RTP packetizers configured', {

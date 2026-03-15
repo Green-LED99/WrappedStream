@@ -330,6 +330,10 @@ export abstract class BaseMediaConnection extends EventEmitter {
     const peerConnection = await this.webRtcWrapper.initWebRtc();
 
     peerConnection.onStateChange((state: string) => {
+      this.logger.debug('PeerConnection state changed', {
+        state,
+        connectionKind: this.connectionKind,
+      });
       if (
         state === 'closed' &&
         !this.closed &&

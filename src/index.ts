@@ -1,5 +1,6 @@
+import 'dotenv/config';
 import { Effect, Layer, pipe } from 'effect';
-import { Command, Option } from 'commander';
+import { Command } from 'commander';
 import { ConfigService, ConfigServiceLive } from './config/loader.js';
 import { DaveService, DaveServiceLive } from './discord/dave/DaveService.js';
 import { GatewayService, makeGatewayServiceLive } from './discord/gateway/GatewayService.js';

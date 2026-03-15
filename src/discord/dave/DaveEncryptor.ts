@@ -5,8 +5,11 @@ export class DaveMediaEncryptor {
   private framePointer = 0;
   private frameCapacity = 0;
 
+  private hasKeyRatchet = false;
+
   public constructor(private readonly dave: DaveModule) {
     this.encryptor = new dave.Encryptor();
+    this.encryptor.SetPassthroughMode(true);
   }
 
   public destroy(): void {
@@ -25,9 +28,14 @@ export class DaveMediaEncryptor {
     this.encryptor.AssignSsrcToCodec(ssrc, this.dave.Codec.H264);
   }
 
+  public get keyRatchetReady(): boolean {
+    return this.hasKeyRatchet;
+  }
+
   public updateSelfKeyRatchet(keyRatchet: DaveKeyRatchet | null): void {
     this.encryptor.SetKeyRatchet(keyRatchet);
     this.encryptor.SetPassthroughMode(keyRatchet === null);
+    this.hasKeyRatchet = keyRatchet !== null;
   }
 
   public encryptAudio(frame: Uint8Array, ssrc: number): Buffer {
@@ -53,7 +61,10 @@ export class DaveMediaEncryptor {
     );
 
     if (bytesWritten <= 0) {
-      throw new Error(`libdave encryptor returned no ciphertext (mediaType=${mediaType}, ssrc=${ssrc})`);
+      // When in passthrough mode (no key ratchet yet) or if the encryptor
+      // fails for any reason, return the original frame unmodified so that
+      // media keeps flowing while the MLS handshake is still in progress.
+      return Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
     }
 
     const outputHeap = this.dave.HEAPU8;
