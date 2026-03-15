@@ -32,12 +32,21 @@ RUN npx tsc -p tsconfig.json
 
 
 # ── Stage 2: Runtime ──────────────────────────────────────────
-# Slim image with only production deps + FFmpeg.
+# Slim image with only production deps + FFmpeg + yt-dlp.
 FROM node:22-bookworm-slim AS runtime
 
-# FFmpeg with libx264 (H.264 encoding) and libopus (Opus encoding).
+# FFmpeg with libx264 (H.264) and libopus (Opus).
+# python3 + pip for yt-dlp (required by play-youtube).
+# ca-certificates for HTTPS fetches (HLS segments, sportsurge, etc.).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
+        python3 \
+        python3-pip \
+        python3-venv \
+        ca-certificates \
+    && python3 -m pip install --no-cache-dir --break-system-packages yt-dlp \
+    && apt-get purge -y python3-pip python3-venv \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -53,7 +62,8 @@ COPY vendor/ vendor/
 # Default environment.  Override at runtime with -e or --env-file.
 ENV LOG_LEVEL=info \
     FFMPEG_PATH=ffmpeg \
-    FFPROBE_PATH=ffprobe
+    FFPROBE_PATH=ffprobe \
+    YTDLP_PATH=yt-dlp
 
 ENTRYPOINT ["node", "dist/src/index.js"]
 CMD ["play-url"]

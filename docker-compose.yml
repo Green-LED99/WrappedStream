@@ -1,0 +1,23 @@
+services:
+  discord-stream:
+    build: .
+    env_file: .env
+    # Override CMD with the desired command + flags.
+    # Examples:
+    #
+    #   Stream a direct URL:
+    #     command: play-url --guild-id 123 --channel-id 456 --url "https://example.com/video.mp4"
+    #
+    #   Search and stream a movie via Stremio/Torrentio/Real-Debrid:
+    #     command: play-search --guild-id 123 --channel-id 456 --query "The Dark Knight"
+    #
+    #   Search and stream a series episode:
+    #     command: play-search --guild-id 123 --channel-id 456 --query "Breaking Bad" --type series --season 1 --episode 1
+    #
+    #   Stream a YouTube video:
+    #     command: play-youtube --guild-id 123 --channel-id 456 --query "lofi hip hop"
+    #
+    #   Stream a live sports event:
+    #     command: play-live --guild-id 123 --channel-id 456 --query "nba knicks"
+    command: play-url --guild-id ${DISCORD_GUILD_ID} --channel-id ${DISCORD_CHANNEL_ID} --url "${VIDEO_URL}"
+    restart: "no"
