@@ -3,12 +3,14 @@ import { Effect } from 'effect';
 import {
   flattenSchedule,
   matchEvent,
+  matchFreeEvent,
+  parseFreeScheduleHtml,
   buildM3u8Url,
   buildStreamHeaders,
 } from '../src/live/DlStreamsClient.js';
 import { resolveLiveQuery } from '../src/live/LiveResolver.js';
 import { createLogger } from '../src/utils/logger.js';
-import type { DlStreamsScheduleResponse, MatchedEvent } from '../src/live/types.js';
+import type { DlStreamsScheduleResponse, FreeScheduleEvent, MatchedEvent } from '../src/live/types.js';
 
 // ─── flattenSchedule ────────────────────────────────────────────────────────
 
@@ -260,6 +262,142 @@ describe('buildStreamHeaders', () => {
     const headers = buildStreamHeaders('https://example.com///');
     expect(headers.Referer).toBe('https://example.com/');
     expect(headers.Origin).toBe('https://example.com');
+  });
+});
+
+// ─── parseFreeScheduleHtml ──────────────────────────────────────────────────
+
+describe('parseFreeScheduleHtml', () => {
+  const sampleHtml = `
+<div class="schedule__day"><div class="schedule__dayTitle">Sunday 15th March 2026</div>
+<div class="schedule__events">
+  <div class="schedule__event">
+    <div class="schedule__eventHeader" data-title="[live] premier league : crystal palace - leeds united 10:00">
+      <span class="schedule__time" data-time="10:00">10:00</span>
+      <span class="schedule__eventTitle">[LIVE] PREMIER LEAGUE : Crystal Palace - Leeds United</span>
+    </div>
+    <div class="schedule__channels">
+      <a href="/watchpulsematch.php?id=20567" data-ch="premier league stream">PREMIER LEAGUE Stream</a>
+    </div>
+  </div>
+  <div class="schedule__event">
+    <div class="schedule__eventHeader" data-title="[live] nba : lakers - celtics 19:30">
+      <span class="schedule__time" data-time="19:30">19:30</span>
+      <span class="schedule__eventTitle">[LIVE] NBA : Lakers - Celtics</span>
+    </div>
+    <div class="schedule__channels">
+      <a href="/watchpulsematch.php?id=20574" data-ch="nba stream">NBA Stream</a>
+    </div>
+  </div>
+</div></div>`;
+
+  it('parses events from HTML with data attributes', () => {
+    const events = parseFreeScheduleHtml(sampleHtml);
+    expect(events).toHaveLength(2);
+  });
+
+  it('extracts title without [LIVE] prefix', () => {
+    const events = parseFreeScheduleHtml(sampleHtml);
+    expect(events[0]!.title).toBe('PREMIER LEAGUE : Crystal Palace - Leeds United');
+  });
+
+  it('extracts time from data-time attribute', () => {
+    const events = parseFreeScheduleHtml(sampleHtml);
+    expect(events[0]!.time).toBe('10:00');
+    expect(events[1]!.time).toBe('19:30');
+  });
+
+  it('extracts watch URL from href', () => {
+    const events = parseFreeScheduleHtml(sampleHtml);
+    expect(events[0]!.watchUrl).toBe('/watchpulsematch.php?id=20567');
+    expect(events[1]!.watchUrl).toBe('/watchpulsematch.php?id=20574');
+  });
+
+  it('extracts channel label from data-ch', () => {
+    const events = parseFreeScheduleHtml(sampleHtml);
+    expect(events[0]!.channelLabel).toBe('premier league stream');
+    expect(events[1]!.channelLabel).toBe('nba stream');
+  });
+
+  it('initializes score to 0', () => {
+    const events = parseFreeScheduleHtml(sampleHtml);
+    expect(events[0]!.score).toBe(0);
+  });
+
+  it('handles empty HTML', () => {
+    expect(parseFreeScheduleHtml('')).toEqual([]);
+  });
+
+  it('handles HTML with no matching events', () => {
+    expect(parseFreeScheduleHtml('<div>No events today</div>')).toEqual([]);
+  });
+});
+
+// ─── matchFreeEvent ────────────────────────────────────────────────────────
+
+describe('matchFreeEvent', () => {
+  const sampleEvents: FreeScheduleEvent[] = [
+    {
+      title: 'PREMIER LEAGUE : Crystal Palace - Leeds United',
+      time: '10:00',
+      channelLabel: 'premier league stream',
+      watchUrl: '/watchpulsematch.php?id=20567',
+      score: 0,
+    },
+    {
+      title: 'NBA : Oklahoma City Thunder - Minnesota Timberwolves',
+      time: '13:00',
+      channelLabel: 'nba stream',
+      watchUrl: '/watchpulsematch.php?id=20574',
+      score: 0,
+    },
+    {
+      title: 'MLB : Boston Red Sox - Minnesota Twins',
+      time: '13:05',
+      channelLabel: 'mlb stream',
+      watchUrl: '/watchpulsematch.php?id=20576',
+      score: 0,
+    },
+  ];
+
+  it('matches "crystal palace" to Premier League event', () => {
+    const result = matchFreeEvent(sampleEvents, 'crystal palace');
+    expect(result).toBeDefined();
+    expect(result!.title).toContain('Crystal Palace');
+    expect(result!.score).toBeGreaterThan(0);
+  });
+
+  it('matches "thunder" to NBA event', () => {
+    const result = matchFreeEvent(sampleEvents, 'thunder');
+    expect(result).toBeDefined();
+    expect(result!.title).toContain('Thunder');
+  });
+
+  it('matches case insensitively', () => {
+    const result = matchFreeEvent(sampleEvents, 'RED SOX');
+    expect(result).toBeDefined();
+    expect(result!.title).toContain('Red Sox');
+  });
+
+  it('boosts score for channel label match', () => {
+    // "nba thunder" should match OKC Thunder AND get bonus for "nba" in channelLabel
+    const result = matchFreeEvent(sampleEvents, 'nba thunder');
+    expect(result).toBeDefined();
+    expect(result!.title).toContain('Thunder');
+    expect(result!.score).toBeGreaterThan(1);
+  });
+
+  it('returns undefined for empty query', () => {
+    expect(matchFreeEvent(sampleEvents, '')).toBeUndefined();
+  });
+
+  it('returns undefined when no tokens match', () => {
+    expect(matchFreeEvent(sampleEvents, 'rugby')).toBeUndefined();
+  });
+
+  it('preserves watchUrl in the result', () => {
+    const result = matchFreeEvent(sampleEvents, 'crystal palace');
+    expect(result!.watchUrl).toBe('/watchpulsematch.php?id=20567');
   });
 });
 

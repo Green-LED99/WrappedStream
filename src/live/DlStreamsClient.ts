@@ -17,6 +17,7 @@ import { LiveStreamError } from '../errors/index.js';
 import type {
   DlStreamsScheduleResponse,
   DlStreamsEvent,
+  FreeScheduleEvent,
   MatchedEvent,
   ResolvedLiveStream,
 } from './types.js';
@@ -77,6 +78,196 @@ export function fetchSchedule(
       new LiveStreamError({
         message: `Failed to fetch schedule: ${error instanceof Error ? error.message : String(error)}`,
         details: { url: url.replace(apiKey, '***') },
+      }),
+  });
+}
+
+// ─── Free schedule (no API key) ─────────────────────────────────────────────
+
+const FREE_SCHEDULE_BASE = 'https://dlstreams.top/schedule-api.php';
+const DLSTREAMS_ORIGIN = 'https://dlstreams.top';
+
+/**
+ * Fetch the free event schedule (no API key required).
+ *
+ * The free endpoint returns JSON `{ success, html }` where `html` is a
+ * chunk of HTML with structured `data-*` attributes we can parse.
+ *
+ * @param source - Schedule source. `extra_plus` has major leagues (~30-40 events),
+ *   `extra_topembed` has the largest selection (~500+ events). Default: `extra_plus`.
+ */
+export function fetchFreeSchedule(
+  source: string = 'extra_plus'
+): Effect.Effect<FreeScheduleEvent[], LiveStreamError> {
+  const url = `${FREE_SCHEDULE_BASE}?source=${encodeURIComponent(source)}`;
+
+  return Effect.tryPromise({
+    try: async () => {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(SCHEDULE_TIMEOUT_MS),
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': DEFAULT_USER_AGENT,
+        },
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(
+          `Free schedule endpoint returned HTTP ${response.status}: ${text.slice(0, 200)}`
+        );
+      }
+
+      const body = (await response.json()) as { success: boolean; html: string };
+
+      if (!body.success || !body.html) {
+        throw new Error('Free schedule endpoint returned success=false or empty html');
+      }
+
+      return parseFreeScheduleHtml(body.html);
+    },
+    catch: (error) =>
+      new LiveStreamError({
+        message: `Failed to fetch free schedule: ${error instanceof Error ? error.message : String(error)}`,
+        details: { url },
+      }),
+  });
+}
+
+/**
+ * Parse the HTML from the free schedule endpoint into structured events.
+ *
+ * The HTML contains event blocks like:
+ * ```html
+ * <div class="schedule__eventHeader" data-title="[live] premier league : ...">
+ *   <span class="schedule__time" data-time="10:00">10:00</span>
+ *   <span class="schedule__eventTitle">[LIVE] PREMIER LEAGUE : ...</span>
+ * </div>
+ * <div class="schedule__channels">
+ *   <a href="/watchpulsematch.php?id=20567" data-ch="premier league stream">...</a>
+ * </div>
+ * ```
+ *
+ * We match each eventHeader to its subsequent channels div.
+ */
+export function parseFreeScheduleHtml(html: string): FreeScheduleEvent[] {
+  const events: FreeScheduleEvent[] = [];
+
+  // Match event blocks: data-title on the header, then the first <a> inside the channels div.
+  // We use a regex that captures the data-title, the event title from the span,
+  // the time, and the channel link attributes.
+  const eventPattern =
+    /data-title="([^"]*)"[^]*?data-time="([^"]*)"[^]*?<span class="schedule__eventTitle">([^<]*)<\/span>[^]*?<a[^>]*href="(\/watch[^"]*)"[^>]*data-ch="([^"]*)"/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = eventPattern.exec(html)) !== null) {
+    const [, , time, rawTitle, watchUrl, channelLabel] = match;
+    if (!rawTitle || !watchUrl) continue;
+
+    // Clean up the title: strip [LIVE] prefix and extra whitespace.
+    const title = rawTitle
+      .replace(/^\[LIVE\]\s*/i, '')
+      .trim();
+
+    events.push({
+      title,
+      time: time ?? '',
+      channelLabel: channelLabel ?? '',
+      watchUrl,
+      score: 0,
+    });
+  }
+
+  return events;
+}
+
+/**
+ * Fuzzy-match a query against free schedule events using word-overlap scoring.
+ * Same algorithm as `matchEvent` but operates on `FreeScheduleEvent[]`.
+ */
+export function matchFreeEvent(
+  events: FreeScheduleEvent[],
+  query: string
+): FreeScheduleEvent | undefined {
+  const queryTokens = tokenize(query);
+  if (queryTokens.length === 0) return undefined;
+
+  let bestMatch: FreeScheduleEvent | undefined;
+  let bestScore = 0;
+
+  for (const event of events) {
+    const titleTokens = tokenize(event.title);
+    const labelTokens = tokenize(event.channelLabel);
+
+    let score = 0;
+    for (const qt of queryTokens) {
+      if (titleTokens.some((tt) => tt.includes(qt) || qt.includes(tt))) {
+        score += 1;
+      }
+      if (labelTokens.some((lt) => lt.includes(qt) || qt.includes(lt))) {
+        score += 0.5;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = { ...event, score };
+    }
+  }
+
+  return bestMatch;
+}
+
+/**
+ * Resolve a DLStreams watch page URL to a DaddyLive channel ID.
+ *
+ * The watch page embeds an iframe like:
+ *   `<iframe id="playerFrame" src="https://embedhd.org/source/fetch.php?hd=17">`
+ *
+ * The `hd` parameter is the DaddyLive channel ID used for server_lookup.
+ */
+export function resolveWatchPageChannelId(
+  watchUrl: string
+): Effect.Effect<number, LiveStreamError> {
+  const fullUrl = watchUrl.startsWith('http') ? watchUrl : `${DLSTREAMS_ORIGIN}${watchUrl}`;
+
+  return Effect.tryPromise({
+    try: async () => {
+      const response = await fetch(fullUrl, {
+        signal: AbortSignal.timeout(SERVER_LOOKUP_TIMEOUT_MS),
+        headers: {
+          'User-Agent': DEFAULT_USER_AGENT,
+          Referer: `${DLSTREAMS_ORIGIN}/`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Watch page returned HTTP ${response.status}`);
+      }
+
+      const html = await response.text();
+
+      // Extract hd=N from iframe src (e.g., src="https://embedhd.org/source/fetch.php?hd=17")
+      const hdMatch = html.match(/src="[^"]*[?&]hd=(\d+)"/);
+      if (hdMatch?.[1]) {
+        return parseInt(hdMatch[1], 10);
+      }
+
+      // Fallback: look for channel_id or channelKey patterns in scripts
+      const channelMatch = html.match(/channel_id[=:]\s*["']?(\d+)["']?/);
+      if (channelMatch?.[1]) {
+        return parseInt(channelMatch[1], 10);
+      }
+
+      throw new Error(
+        'Could not extract DaddyLive channel ID from watch page. ' +
+          'The page structure may have changed.'
+      );
+    },
+    catch: (error) =>
+      new LiveStreamError({
+        message: `Failed to resolve watch page channel ID: ${error instanceof Error ? error.message : String(error)}`,
+        details: { watchUrl: fullUrl },
       }),
   });
 }

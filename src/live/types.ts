@@ -50,6 +50,26 @@ export type MatchedEvent = {
   score: number;
 };
 
+/**
+ * A parsed event from the free schedule-api.php endpoint.
+ *
+ * The free endpoint returns HTML with data attributes instead of structured
+ * JSON. Each event maps to a watch page URL (e.g. /watchpulsematch.php?id=20567)
+ * rather than a direct DaddyLive channel ID.
+ */
+export type FreeScheduleEvent = {
+  /** Event title (e.g. "PREMIER LEAGUE : Crystal Palace - Leeds United"). */
+  title: string;
+  /** Broadcast time (e.g. "10:00"). */
+  time: string;
+  /** Channel/category label (e.g. "premier league stream"). */
+  channelLabel: string;
+  /** Relative watch page URL (e.g. "/watchpulsematch.php?id=20567"). */
+  watchUrl: string;
+  /** Fuzzy match score (populated by matchFreeEvent). */
+  score: number;
+};
+
 /** Final resolved live stream ready for the FFmpeg pipeline. */
 export type ResolvedLiveStream = {
   eventTitle: string;

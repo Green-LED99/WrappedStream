@@ -178,11 +178,11 @@ program
         (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info';
       const logger = createLogger(logLevel);
 
-      const apiKey = process.env['DLSTREAMS_API_KEY'];
+      const apiKey = process.env['DLSTREAMS_API_KEY'] ?? '';
       if (!apiKey) {
-        throw new Error(
-          'DLSTREAMS_API_KEY is required for play-live. ' +
-            'Set it to your DLStreams API key.'
+        logger.info(
+          'No DLSTREAMS_API_KEY set — using free schedule endpoint (major leagues only). ' +
+            'Set DLSTREAMS_API_KEY for full schedule access.'
         );
       }
 
