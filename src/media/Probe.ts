@@ -62,29 +62,35 @@ export function findEnglishSubtitleIndex(
 
 export async function probeMedia(
   ffprobePath: string,
-  url: string
+  url: string,
+  httpHeaders?: Record<string, string>
 ): Promise<FfprobeResult> {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      ffprobePath,
-      [
-        '-v',
-        'error',
-        '-show_entries',
-        'stream=index,codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
-        '-show_streams',
-        '-show_format',
-        '-of',
-        'json',
-        url,
-      ],
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }
+    const args = ['-v', 'error', '-extension_picky', '0'];
+
+    if (httpHeaders && Object.keys(httpHeaders).length > 0) {
+      const headerStr = Object.entries(httpHeaders)
+        .map(([k, v]) => `${k}: ${v}\r\n`)
+        .join('');
+      args.push('-headers', headerStr);
+    }
+
+    args.push(
+      '-show_entries',
+      'stream=index,codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
+      '-show_streams',
+      '-show_format',
+      '-of',
+      'json',
+      url,
     );
+
+    const child = spawn(ffprobePath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     child.stdout.on('data', (chunk) => {
       stdout.push(Buffer.from(chunk));

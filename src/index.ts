@@ -9,6 +9,7 @@ import { MediaService, MediaServiceLive } from './media/MediaService.js';
 import { describeTranscodePlan } from './media/TranscodePlan.js';
 import { resolveSearchQuery } from './stremio/StremioResolver.js';
 import { resolveYouTubeQuery } from './youtube/YouTubeResolver.js';
+import { resolveLiveQuery } from './live/LiveResolver.js';
 import { createLogger } from './utils/logger.js';
 
 const program = new Command()
@@ -154,6 +155,48 @@ program
     });
   });
 
+// ─── play-live ──────────────────────────────────────────────────────
+program
+  .command('play-live')
+  .description(
+    'Search for a live sports event and stream it to Discord'
+  )
+  .requiredOption('--guild-id <id>', 'Discord guild (server) ID')
+  .requiredOption('--channel-id <id>', 'Discord voice channel ID')
+  .requiredOption('--query <query>', 'Event search query (e.g. "nba knicks", "nhl maple leafs")')
+  .option('--json', 'Output structured JSON logs', false)
+  .action(async (options: {
+    guildId: string;
+    channelId: string;
+    query: string;
+    json: boolean;
+  }) => {
+    await withSignalHandler(async (signal) => {
+      const logLevel =
+        (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info';
+      const logger = createLogger(logLevel);
+
+      const resolved = await Effect.runPromise(
+        resolveLiveQuery(options.query, logger)
+      );
+
+      logger.info('Resolved live stream for streaming', {
+        eventTitle: resolved.eventTitle,
+        sport: resolved.sport,
+        streamUrl: resolved.streamUrl.slice(0, 80) + '...',
+      });
+
+      await runStreamJob(
+        options.guildId,
+        options.channelId,
+        resolved.streamUrl,
+        signal,
+        undefined,
+        resolved.headers
+      );
+    });
+  });
+
 program.parse();
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -185,7 +228,8 @@ async function runStreamJob(
   channelId: string,
   videoUrl: string,
   abortSignal: AbortSignal,
-  audioUrl?: string
+  audioUrl?: string,
+  httpHeaders?: Record<string, string>
 ): Promise<void> {
   const mainEffect = Effect.gen(function* () {
     const config = yield* ConfigService;
@@ -219,7 +263,7 @@ async function runStreamJob(
 
     // 4. Probe media
     logger.info('Probing media source', { url: videoUrl });
-    const probeResult = yield* media.probe(config.ffprobePath, videoUrl);
+    const probeResult = yield* media.probe(config.ffprobePath, videoUrl, httpHeaders);
 
     // 5. Select transcode plan
     const plan = yield* media.selectPlan(probeResult);
@@ -253,7 +297,8 @@ async function runStreamJob(
       config.ffmpegPath,
       videoUrl,
       plan,
-      audioUrl
+      audioUrl,
+      httpHeaders
     );
 
     // 8. Create Go Live stream and play

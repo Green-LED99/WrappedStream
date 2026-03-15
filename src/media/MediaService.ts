@@ -21,7 +21,8 @@ export class MediaService extends Context.Tag('MediaService')<
   {
     readonly probe: (
       ffprobePath: string,
-      url: string
+      url: string,
+      httpHeaders?: Record<string, string>
     ) => Effect.Effect<FfprobeResult, MediaError>;
     readonly selectPlan: (
       probe: FfprobeResult
@@ -30,7 +31,8 @@ export class MediaService extends Context.Tag('MediaService')<
       ffmpegPath: string,
       url: string,
       plan: TranscodePlan,
-      audioUrl?: string
+      audioUrl?: string,
+      httpHeaders?: Record<string, string>
     ) => Effect.Effect<FfmpegNutProcess, MediaError>;
     readonly playStream: (
       input: NodeJS.ReadableStream,
@@ -43,9 +45,9 @@ export class MediaService extends Context.Tag('MediaService')<
 >() {}
 
 export const MediaServiceLive = Layer.succeed(MediaService, {
-  probe: (ffprobePath: string, url: string) =>
+  probe: (ffprobePath: string, url: string, httpHeaders?: Record<string, string>) =>
     Effect.tryPromise({
-      try: () => probeMedia(ffprobePath, url),
+      try: () => probeMedia(ffprobePath, url, httpHeaders),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),
@@ -61,9 +63,9 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
         }),
     }),
 
-  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string) =>
+  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string, httpHeaders?: Record<string, string>) =>
     Effect.try({
-      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl),
+      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl, httpHeaders),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),

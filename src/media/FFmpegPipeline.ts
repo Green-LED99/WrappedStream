@@ -36,11 +36,19 @@ function escapeSubtitlePath(path: string): string {
 export function buildFfmpegNutArgs(
   url: string,
   plan: TranscodePlan,
-  audioUrl?: string
+  audioUrl?: string,
+  httpHeaders?: Record<string, string>
 ): string[] {
-  const args = [
-    '-v',
-    'warning',
+  const args = ['-v', 'warning', '-extension_picky', '0'];
+
+  if (httpHeaders && Object.keys(httpHeaders).length > 0) {
+    const headerStr = Object.entries(httpHeaders)
+      .map(([k, v]) => `${k}: ${v}\r\n`)
+      .join('');
+    args.push('-headers', headerStr);
+  }
+
+  args.push(
     '-reconnect',
     '1',
     '-reconnect_streamed',
@@ -49,7 +57,7 @@ export function buildFfmpegNutArgs(
     '1',
     '-i',
     url,
-  ];
+  );
 
   // When a separate audio URL is provided (e.g. YouTube split streams),
   // add it as a second input.
@@ -144,9 +152,10 @@ export function createFfmpegNutProcess(
   ffmpegPath: string,
   url: string,
   plan: TranscodePlan,
-  audioUrl?: string
+  audioUrl?: string,
+  httpHeaders?: Record<string, string>
 ): FfmpegNutProcess {
-  const args = buildFfmpegNutArgs(url, plan, audioUrl);
+  const args = buildFfmpegNutArgs(url, plan, audioUrl, httpHeaders);
   const startedAt = performance.now();
   const child = spawn(ffmpegPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
