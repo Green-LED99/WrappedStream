@@ -47,11 +47,6 @@ export class YouTubeError extends Data.TaggedError('YouTubeError')<{
   readonly details?: Record<string, unknown>;
 }> {}
 
-export class LiveStreamError extends Data.TaggedError('LiveStreamError')<{
-  readonly message: string;
-  readonly details?: Record<string, unknown>;
-}> {}
-
 export enum ExitCode {
   Ok = 0,
   Config = 10,
@@ -62,5 +57,4 @@ export enum ExitCode {
   Transport = 60,
   Internal = 70,
   YouTube = 80,
-  LiveStream = 90,
 }
