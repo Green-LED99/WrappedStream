@@ -48,16 +48,22 @@ export function buildFfmpegNutArgs(
     args.push('-headers', headerStr);
   }
 
-  args.push(
-    '-reconnect',
-    '1',
-    '-reconnect_streamed',
-    '1',
-    '-reconnect_at_eof',
-    '1',
-    '-i',
-    url,
-  );
+  // Reconnect flags are only useful for direct HTTP streams (mp4, mkv).
+  // For HLS (m3u8 / playlist URLs), the HLS demuxer handles segment
+  // fetching internally — reconnect flags cause it to hang on EOF.
+  const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
+  if (!isHls) {
+    args.push(
+      '-reconnect',
+      '1',
+      '-reconnect_streamed',
+      '1',
+      '-reconnect_at_eof',
+      '1',
+    );
+  }
+
+  args.push('-i', url);
 
   // When a separate audio URL is provided (e.g. YouTube split streams),
   // add it as a second input.
