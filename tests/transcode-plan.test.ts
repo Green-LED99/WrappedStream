@@ -421,4 +421,34 @@ describe('buildFfmpegNutArgs', () => {
     expect(args).toContain('0:a:0?');
     expect(args).not.toContain('1:a:0');
   });
+
+  it('adds -headers flag before -i when httpHeaders are provided', () => {
+    const headers = {
+      Referer: 'https://cookiewebplay.xyz/',
+      Origin: 'https://cookiewebplay.xyz',
+    };
+    const args = buildFfmpegNutArgs('https://example.com/stream.m3u8', basePlan, undefined, headers);
+
+    const headersIdx = args.indexOf('-headers');
+    expect(headersIdx).toBeGreaterThan(-1);
+
+    // -headers value should contain the Referer and Origin
+    const headersValue = args[headersIdx + 1]!;
+    expect(headersValue).toContain('Referer: https://cookiewebplay.xyz/');
+    expect(headersValue).toContain('Origin: https://cookiewebplay.xyz');
+
+    // -headers must appear before the first -i
+    const firstIIdx = args.indexOf('-i');
+    expect(headersIdx).toBeLessThan(firstIIdx);
+  });
+
+  it('does not add -headers flag when httpHeaders is undefined', () => {
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', basePlan);
+    expect(args).not.toContain('-headers');
+  });
+
+  it('does not add -headers flag when httpHeaders is empty', () => {
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', basePlan, undefined, {});
+    expect(args).not.toContain('-headers');
+  });
 });

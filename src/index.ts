@@ -9,6 +9,7 @@ import { MediaService, MediaServiceLive } from './media/MediaService.js';
 import { describeTranscodePlan } from './media/TranscodePlan.js';
 import { resolveSearchQuery } from './stremio/StremioResolver.js';
 import { resolveYouTubeQuery } from './youtube/YouTubeResolver.js';
+import { resolveLiveQuery } from './live/LiveResolver.js';
 import { createLogger } from './utils/logger.js';
 
 const program = new Command()
@@ -154,6 +155,71 @@ program
     });
   });
 
+// ─── play-live ─────────────────────────────────────────────────────
+program
+  .command('play-live')
+  .description(
+    'Search DLStreams for a live sports event and stream it to Discord'
+  )
+  .requiredOption('--guild-id <id>', 'Discord guild (server) ID')
+  .requiredOption('--channel-id <id>', 'Discord voice channel ID')
+  .requiredOption('--query <query>', 'Event search query (e.g. "stars game", "lakers celtics")')
+  .option('--stream-channel-id <id>', 'Direct DLStreams channel ID (skip schedule search)', parseInt)
+  .option('--json', 'Output structured JSON logs', false)
+  .action(async (options: {
+    guildId: string;
+    channelId: string;
+    query: string;
+    streamChannelId?: number;
+    json: boolean;
+  }) => {
+    await withSignalHandler(async (signal) => {
+      const logLevel =
+        (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info';
+      const logger = createLogger(logLevel);
+
+      const apiKey = process.env['DLSTREAMS_API_KEY'];
+      if (!apiKey) {
+        throw new Error(
+          'DLSTREAMS_API_KEY is required for play-live. ' +
+            'Set it to your DLStreams API key.'
+        );
+      }
+
+      const playerDomain = process.env['DLSTREAMS_PLAYER_DOMAIN'] || undefined;
+
+      // Resolve the live event to a streamable HLS URL.
+      const resolved = await Effect.runPromise(
+        resolveLiveQuery(
+          apiKey,
+          {
+            query: options.query,
+            channelId: options.streamChannelId,
+          },
+          logger,
+          playerDomain
+        )
+      );
+
+      logger.info('Resolved live stream for streaming', {
+        eventTitle: resolved.eventTitle,
+        channelName: resolved.channelName,
+        channelId: resolved.channelId,
+        streamUrl: resolved.streamUrl.slice(0, 80) + '...',
+      });
+
+      // Feed the resolved HLS URL into the streaming pipeline with custom headers.
+      await runStreamJob(
+        options.guildId,
+        options.channelId,
+        resolved.streamUrl,
+        signal,
+        undefined,       // no separate audioUrl (HLS is muxed)
+        resolved.headers  // Referer + Origin headers for HLS
+      );
+    });
+  });
+
 program.parse();
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -185,7 +251,8 @@ async function runStreamJob(
   channelId: string,
   videoUrl: string,
   abortSignal: AbortSignal,
-  audioUrl?: string
+  audioUrl?: string,
+  httpHeaders?: Record<string, string>
 ): Promise<void> {
   const mainEffect = Effect.gen(function* () {
     const config = yield* ConfigService;
@@ -253,7 +320,8 @@ async function runStreamJob(
       config.ffmpegPath,
       videoUrl,
       plan,
-      audioUrl
+      audioUrl,
+      httpHeaders
     );
 
     // 8. Create Go Live stream and play
@@ -320,6 +388,8 @@ async function runStreamJob(
     ffprobePath: process.env['FFPROBE_PATH'] ?? 'ffprobe',
     stremioAddonUrl: process.env['STREMIO_ADDON_URL'] ?? '',
     ytdlpPath: process.env['YTDLP_PATH'] ?? 'yt-dlp',
+    dlStreamsApiKey: process.env['DLSTREAMS_API_KEY'] ?? '',
+    dlStreamsPlayerDomain: process.env['DLSTREAMS_PLAYER_DOMAIN'] ?? '',
   });
 
   const loggerForGateway = createLogger(

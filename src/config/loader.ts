@@ -26,6 +26,8 @@ export const ConfigServiceFromEnv = Layer.effect(
       ffprobePath: process.env['FFPROBE_PATH'],
       stremioAddonUrl: process.env['STREMIO_ADDON_URL'],
       ytdlpPath: process.env['YTDLP_PATH'],
+      dlStreamsApiKey: process.env['DLSTREAMS_API_KEY'],
+      dlStreamsPlayerDomain: process.env['DLSTREAMS_PLAYER_DOMAIN'],
     };
 
     const config = yield* decode(raw).pipe(
@@ -53,6 +55,8 @@ export function ConfigServiceLive(raw: {
   ffprobePath?: string;
   stremioAddonUrl?: string;
   ytdlpPath?: string;
+  dlStreamsApiKey?: string;
+  dlStreamsPlayerDomain?: string;
 }): Layer.Layer<ConfigService, ConfigError> {
   return Layer.effect(
     ConfigService,

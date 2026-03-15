@@ -14,4 +14,6 @@ export class AppConfig extends Schema.Class<AppConfig>('AppConfig')({
   ffprobePath: Schema.optionalWith(Schema.String, { default: () => 'ffprobe' }),
   stremioAddonUrl: Schema.optionalWith(Schema.String, { default: () => '' }),
   ytdlpPath: Schema.optionalWith(Schema.String, { default: () => 'yt-dlp' }),
+  dlStreamsApiKey: Schema.optionalWith(Schema.String, { default: () => '' }),
+  dlStreamsPlayerDomain: Schema.optionalWith(Schema.String, { default: () => '' }),
 }) {}
