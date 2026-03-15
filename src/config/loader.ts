@@ -10,7 +10,8 @@ export class ConfigService extends Context.Tag('ConfigService')<
 
 const decode = Schema.decodeUnknown(AppConfig);
 
-export const ConfigServiceLive = Layer.effect(
+/** Load config from .env / process.env */
+export const ConfigServiceFromEnv = Layer.effect(
   ConfigService,
   Effect.gen(function* () {
     loadDotenv();
@@ -38,3 +39,27 @@ export const ConfigServiceLive = Layer.effect(
     return config;
   })
 );
+
+/** Create config layer from explicit values (for CLI entrypoint). */
+export function ConfigServiceLive(raw: {
+  token: string;
+  guildId: string;
+  channelId: string;
+  videoUrl: string;
+  logLevel?: string;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+}): Layer.Layer<ConfigService, ConfigError> {
+  return Layer.effect(
+    ConfigService,
+    decode(raw).pipe(
+      Effect.mapError(
+        (parseError) =>
+          new ConfigError({
+            message: 'Invalid configuration',
+            details: { error: String(parseError) },
+          })
+      )
+    )
+  );
+}

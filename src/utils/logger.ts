@@ -58,3 +58,7 @@ export function parseLogLevel(value: string | undefined): LogLevel {
 
   return 'info';
 }
+
+export function createLogger(level: string | undefined): Logger {
+  return new Logger('app', parseLogLevel(level));
+}
