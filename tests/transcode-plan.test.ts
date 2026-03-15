@@ -7,7 +7,8 @@ import {
   LOW_CPU_AUDIO_SAMPLE_RATE,
   LOW_CPU_AUDIO_CHANNELS,
 } from '../src/media/TranscodePlan.js';
-import type { FfprobeResult } from '../src/media/Probe.js';
+import { findEnglishSubtitleIndex, type FfprobeResult, type FfprobeStream } from '../src/media/Probe.js';
+import { buildFfmpegNutArgs } from '../src/media/FFmpegPipeline.js';
 
 describe('parseFrameRate', () => {
   it('parses standard fraction format', () => {
@@ -201,5 +202,223 @@ describe('selectTranscodePlan', () => {
     if (plan.video.mode === 'transcode') {
       expect(plan.video.filters).toContain(`fps=${LOW_CPU_TARGET_FPS}`);
     }
+  });
+
+  it('detects English subtitle stream and includes in plan', () => {
+    const probe: FfprobeResult = {
+      streams: [
+        { codec_name: 'h264', codec_type: 'video', width: 1920, height: 1080, avg_frame_rate: '24/1' },
+        { codec_name: 'aac', codec_type: 'audio', sample_rate: '44100', channels: 2 },
+        { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'eng' } },
+      ],
+    };
+    const plan = selectTranscodePlan(probe);
+    expect(plan.subtitle).toBeDefined();
+    expect(plan.subtitle?.streamIndex).toBe(0);
+  });
+
+  it('skips subtitle plan when no English subtitles present', () => {
+    const probe: FfprobeResult = {
+      streams: [
+        { codec_name: 'h264', codec_type: 'video', width: 1920, height: 1080, avg_frame_rate: '24/1' },
+        { codec_name: 'aac', codec_type: 'audio', sample_rate: '44100', channels: 2 },
+        { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'fre' } },
+      ],
+    };
+    const plan = selectTranscodePlan(probe);
+    expect(plan.subtitle).toBeUndefined();
+  });
+
+  it('picks correct subtitle index among multiple subtitle streams', () => {
+    const probe: FfprobeResult = {
+      streams: [
+        { codec_name: 'h264', codec_type: 'video', width: 1920, height: 1080, avg_frame_rate: '24/1' },
+        { codec_name: 'aac', codec_type: 'audio', sample_rate: '44100', channels: 2 },
+        { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'fre' } },
+        { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'spa' } },
+        { codec_name: 'ass', codec_type: 'subtitle', tags: { language: 'eng' } },
+      ],
+    };
+    const plan = selectTranscodePlan(probe);
+    expect(plan.subtitle).toBeDefined();
+    expect(plan.subtitle?.streamIndex).toBe(2);
+  });
+});
+
+describe('findEnglishSubtitleIndex', () => {
+  it('returns undefined when no subtitle streams exist', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'h264', codec_type: 'video' },
+      { codec_name: 'aac', codec_type: 'audio' },
+    ];
+    expect(findEnglishSubtitleIndex(streams)).toBeUndefined();
+  });
+
+  it('returns undefined for non-English subtitle streams', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'fre' } },
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'ger' } },
+    ];
+    expect(findEnglishSubtitleIndex(streams)).toBeUndefined();
+  });
+
+  it('finds eng language subtitle', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'eng' } },
+    ];
+    expect(findEnglishSubtitleIndex(streams)).toBe(0);
+  });
+
+  it('finds en language subtitle', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'ass', codec_type: 'subtitle', tags: { language: 'en' } },
+    ];
+    expect(findEnglishSubtitleIndex(streams)).toBe(0);
+  });
+
+  it('rejects bitmap subtitle codecs (dvd_subtitle)', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'dvd_subtitle', codec_type: 'subtitle', tags: { language: 'eng' } },
+    ];
+    expect(findEnglishSubtitleIndex(streams)).toBeUndefined();
+  });
+
+  it('rejects hdmv_pgs_subtitle (Blu-ray bitmap)', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'hdmv_pgs_subtitle', codec_type: 'subtitle', tags: { language: 'eng' } },
+    ];
+    expect(findEnglishSubtitleIndex(streams)).toBeUndefined();
+  });
+
+  it('accepts all text subtitle codecs', () => {
+    const codecs = ['subrip', 'ass', 'ssa', 'webvtt', 'mov_text', 'srt', 'text'];
+    for (const codec of codecs) {
+      const streams: FfprobeStream[] = [
+        { codec_name: codec, codec_type: 'subtitle', tags: { language: 'eng' } },
+      ];
+      expect(findEnglishSubtitleIndex(streams)).toBe(0);
+    }
+  });
+
+  it('returns index among subtitle streams only (not absolute stream index)', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'h264', codec_type: 'video' },
+      { codec_name: 'aac', codec_type: 'audio' },
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'fre' } },
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'eng' } },
+    ];
+    // eng is the second subtitle stream (index 1), not overall stream index 3
+    expect(findEnglishSubtitleIndex(streams)).toBe(1);
+  });
+});
+
+describe('buildFfmpegNutArgs', () => {
+  const basePlan = {
+    video: {
+      mode: 'transcode' as const,
+      sourceCodec: 'hevc',
+      sourceHeight: 1080,
+      sourceFps: 24,
+      targetCodec: 'h264' as const,
+      targetHeight: 720 as const,
+      targetFps: 30 as const,
+      targetBitrateKbps: 2500 as const,
+      maxBitrateKbps: 4500 as const,
+      threads: 2 as const,
+      filters: ['scale=-2:720'],
+    },
+    audio: {
+      mode: 'transcode' as const,
+      sourceCodec: 'aac',
+      sampleRate: 44100,
+      channels: 6,
+      targetCodec: 'opus' as const,
+      targetBitrateKbps: 128 as const,
+      targetSampleRate: 48000 as const,
+      targetChannels: 2 as const,
+    },
+    usesTranscode: true,
+  };
+
+  it('does not add subtitle filter when no subtitle plan', () => {
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', basePlan);
+    const vfIdx = args.indexOf('-vf');
+    expect(vfIdx).toBeGreaterThan(-1);
+    expect(args[vfIdx + 1]).toBe('scale=-2:720');
+  });
+
+  it('adds subtitle filter with escaped URL', () => {
+    const plan = { ...basePlan, subtitle: { streamIndex: 0 } };
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', plan);
+    const vfIdx = args.indexOf('-vf');
+    expect(vfIdx).toBeGreaterThan(-1);
+    const vf = args[vfIdx + 1]!;
+    expect(vf).toContain('subtitles=');
+    expect(vf).toContain(':si=0');
+    // Colons in URL must be double-backslash escaped for FFmpeg filter parser
+    expect(vf).toContain('https\\\\:');
+  });
+
+  it('escapes special characters in subtitle path', () => {
+    const plan = { ...basePlan, subtitle: { streamIndex: 2 } };
+    const url = "https://host:8080/path/file[v1]'s;name.mkv";
+    const args = buildFfmpegNutArgs(url, plan);
+    const vfIdx = args.indexOf('-vf');
+    const vf = args[vfIdx + 1]!;
+    // Colons double-backslash escaped
+    expect(vf).toContain('https\\\\:');
+    expect(vf).toContain('\\\\:8080');
+    // Brackets escaped
+    expect(vf).toContain('\\\\[v1\\\\]');
+    // Quote escaped
+    expect(vf).toContain("\\\\'s");
+    // Semicolon escaped
+    expect(vf).toContain('\\\\;name');
+    // Stream index unescaped option
+    expect(vf).toContain(':si=2');
+  });
+
+  it('produces correct filter chain order: scale, then subtitles', () => {
+    const plan = { ...basePlan, subtitle: { streamIndex: 0 } };
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', plan);
+    const vfIdx = args.indexOf('-vf');
+    const vf = args[vfIdx + 1]!;
+    const scalePos = vf.indexOf('scale=');
+    const subPos = vf.indexOf('subtitles=');
+    expect(scalePos).toBeLessThan(subPos);
+  });
+
+  it('omits -vf when no filters and no subtitles', () => {
+    const noFilterPlan = {
+      ...basePlan,
+      video: { ...basePlan.video, filters: [] },
+    };
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', noFilterPlan);
+    expect(args.includes('-vf')).toBe(false);
+  });
+
+  it('adds second -i input and maps audio from input 1 when audioUrl is provided', () => {
+    const videoUrl = 'https://rr1.googlevideo.com/videoplayback?itag=137';
+    const audioUrl = 'https://rr1.googlevideo.com/videoplayback?itag=140';
+    const args = buildFfmpegNutArgs(videoUrl, basePlan, audioUrl);
+
+    // Should have two -i arguments
+    const iIndices = args.reduce<number[]>((acc, arg, i) => {
+      if (arg === '-i') acc.push(i);
+      return acc;
+    }, []);
+    expect(iIndices.length).toBe(2);
+    expect(args[iIndices[0]! + 1]).toBe(videoUrl);
+    expect(args[iIndices[1]! + 1]).toBe(audioUrl);
+
+    // Audio should map from input 1, not input 0
+    expect(args).toContain('1:a:0');
+    expect(args).not.toContain('0:a:0?');
+  });
+
+  it('maps audio from input 0 when no audioUrl is provided', () => {
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', basePlan);
+    expect(args).toContain('0:a:0?');
+    expect(args).not.toContain('1:a:0');
   });
 });

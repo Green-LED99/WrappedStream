@@ -24,6 +24,8 @@ export const ConfigServiceFromEnv = Layer.effect(
       logLevel: process.env['LOG_LEVEL'],
       ffmpegPath: process.env['FFMPEG_PATH'],
       ffprobePath: process.env['FFPROBE_PATH'],
+      stremioAddonUrl: process.env['STREMIO_ADDON_URL'],
+      ytdlpPath: process.env['YTDLP_PATH'],
     };
 
     const config = yield* decode(raw).pipe(
@@ -49,6 +51,8 @@ export function ConfigServiceLive(raw: {
   logLevel?: string;
   ffmpegPath?: string;
   ffprobePath?: string;
+  stremioAddonUrl?: string;
+  ytdlpPath?: string;
 }): Layer.Layer<ConfigService, ConfigError> {
   return Layer.effect(
     ConfigService,

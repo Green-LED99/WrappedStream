@@ -9,7 +9,35 @@ export type FfmpegNutProcess = {
   stop(): void;
 };
 
-export function buildFfmpegNutArgs(url: string, plan: TranscodePlan): string[] {
+/**
+ * Escape a file path / URL for use in the FFmpeg `subtitles` filter value.
+ *
+ * FFmpeg's filter option parser uses `:` as the option separator. When the
+ * argument is passed directly via `spawn()` (no shell), each special character
+ * must be preceded by **two** backslashes (`\\`) so that the filtergraph
+ * parser un-escapes one level and the remaining `\:` is treated as a literal
+ * colon by the subtitles filter itself.
+ *
+ * Special characters: `\` `:` `'` `[` `]` `;`
+ *
+ * The `:` before option keys like `:si=0` must NOT be escaped — those are
+ * appended separately after the escaped filename.
+ */
+function escapeSubtitlePath(path: string): string {
+  return path
+    .replace(/\\/g, '\\\\\\\\')
+    .replace(/:/g, '\\\\:')
+    .replace(/'/g, "\\\\'")
+    .replace(/\[/g, '\\\\[')
+    .replace(/]/g, '\\\\]')
+    .replace(/;/g, '\\\\;');
+}
+
+export function buildFfmpegNutArgs(
+  url: string,
+  plan: TranscodePlan,
+  audioUrl?: string
+): string[] {
   const args = [
     '-v',
     'warning',
@@ -21,12 +49,28 @@ export function buildFfmpegNutArgs(url: string, plan: TranscodePlan): string[] {
     '1',
     '-i',
     url,
-    '-map',
-    '0:v:0',
   ];
 
+  // When a separate audio URL is provided (e.g. YouTube split streams),
+  // add it as a second input.
+  if (audioUrl) {
+    args.push(
+      '-reconnect',
+      '1',
+      '-reconnect_streamed',
+      '1',
+      '-reconnect_at_eof',
+      '1',
+      '-i',
+      audioUrl
+    );
+  }
+
+  args.push('-map', '0:v:0');
+
   if (plan.audio) {
-    args.push('-map', '0:a:0?');
+    // If we have a separate audio input, map from input 1; otherwise from input 0.
+    args.push('-map', audioUrl ? '1:a:0' : '0:a:0?');
   } else {
     args.push('-an');
   }
@@ -44,8 +88,17 @@ export function buildFfmpegNutArgs(url: string, plan: TranscodePlan): string[] {
     'yuv420p'
   );
 
-  if (plan.video.filters.length > 0) {
-    args.push('-vf', plan.video.filters.join(','));
+  // Build the video filter chain.
+  // Order: scale first (work on smaller frames), then burn subtitles.
+  const filters = [...plan.video.filters];
+
+  if (plan.subtitle != null) {
+    const escaped = escapeSubtitlePath(url);
+    filters.push(`subtitles=${escaped}:si=${plan.subtitle.streamIndex}`);
+  }
+
+  if (filters.length > 0) {
+    args.push('-vf', filters.join(','));
   }
 
   args.push(
@@ -90,9 +143,10 @@ export function buildFfmpegNutArgs(url: string, plan: TranscodePlan): string[] {
 export function createFfmpegNutProcess(
   ffmpegPath: string,
   url: string,
-  plan: TranscodePlan
+  plan: TranscodePlan,
+  audioUrl?: string
 ): FfmpegNutProcess {
-  const args = buildFfmpegNutArgs(url, plan);
+  const args = buildFfmpegNutArgs(url, plan, audioUrl);
   const startedAt = performance.now();
   const child = spawn(ffmpegPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],

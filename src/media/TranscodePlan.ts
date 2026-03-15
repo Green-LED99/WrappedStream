@@ -1,4 +1,8 @@
-import type { FfprobeResult, FfprobeStream } from './Probe.js';
+import {
+  findEnglishSubtitleIndex,
+  type FfprobeResult,
+  type FfprobeStream,
+} from './Probe.js';
 
 export const LOW_CPU_TARGET_HEIGHT = 720;
 export const LOW_CPU_TARGET_FPS = 30;
@@ -41,9 +45,15 @@ export type AudioPlan =
       targetChannels: typeof LOW_CPU_AUDIO_CHANNELS;
     };
 
+export type SubtitlePlan = {
+  /** Index of the subtitle stream among all subtitle streams (for FFmpeg `si=`). */
+  streamIndex: number;
+};
+
 export type TranscodePlan = {
   video: VideoPlan;
   audio?: AudioPlan;
+  subtitle?: SubtitlePlan;
   usesTranscode: boolean;
 };
 
@@ -99,9 +109,15 @@ export function selectTranscodePlan(probe: FfprobeResult): TranscodePlan {
 
   const audio = audioStream ? selectAudioPlan(audioStream) : undefined;
 
+  // Detect embedded English text subtitles for burn-in.
+  const engSubIndex = findEnglishSubtitleIndex(probe.streams);
+  const subtitle: SubtitlePlan | undefined =
+    engSubIndex != null ? { streamIndex: engSubIndex } : undefined;
+
   return {
     video,
     ...(audio ? { audio } : {}),
+    ...(subtitle ? { subtitle } : {}),
     usesTranscode: video.mode === 'transcode' || audio?.mode === 'transcode',
   };
 }
@@ -137,6 +153,9 @@ export function describeTranscodePlan(plan: TranscodePlan): Record<string, unkno
               }
             : {}),
         }
+      : null,
+    subtitle: plan.subtitle
+      ? { streamIndex: plan.subtitle.streamIndex, burnIn: true }
       : null,
   };
 }

@@ -4,17 +4,19 @@ import { Command } from 'commander';
 import { ConfigService, ConfigServiceLive } from './config/loader.js';
 import { DaveService, DaveServiceLive } from './discord/dave/DaveService.js';
 import { GatewayService, makeGatewayServiceLive } from './discord/gateway/GatewayService.js';
-import { GatewayOpcode } from './discord/gateway/opcodes.js';
 import { StreamerService, StreamerServiceLive } from './discord/streamer/StreamerService.js';
 import { MediaService, MediaServiceLive } from './media/MediaService.js';
 import { describeTranscodePlan } from './media/TranscodePlan.js';
-import { createLogger, type Logger } from './utils/logger.js';
+import { resolveSearchQuery } from './stremio/StremioResolver.js';
+import { resolveYouTubeQuery } from './youtube/YouTubeResolver.js';
+import { createLogger } from './utils/logger.js';
 
 const program = new Command()
   .name('discord-stream')
   .description('Stream video to a Discord voice channel via Go Live')
   .version('0.1.0');
 
+// ─── play-url ────────────────────────────────────────────────────────
 program
   .command('play-url')
   .description('Stream a video URL to a Discord voice channel')
@@ -28,38 +30,162 @@ program
     url: string;
     json: boolean;
   }) => {
-    const abortController = new AbortController();
+    await withSignalHandler((signal) =>
+      runStreamJob(options.guildId, options.channelId, options.url, signal)
+    );
+  });
 
-    const onSignal = () => {
-      abortController.abort(new Error('Received shutdown signal'));
-    };
-    process.on('SIGINT', onSignal);
-    process.on('SIGTERM', onSignal);
+// ─── play-search ─────────────────────────────────────────────────────
+program
+  .command('play-search')
+  .description(
+    'Search for content via Stremio/Torrentio, resolve a Real-Debrid link, and stream it'
+  )
+  .requiredOption('--guild-id <id>', 'Discord guild (server) ID')
+  .requiredOption('--channel-id <id>', 'Discord voice channel ID')
+  .requiredOption('--query <query>', 'Search query (e.g. "The Dark Knight")')
+  .option('--type <type>', 'Content type: movie or series')
+  .option('--season <number>', 'Season number (required for series)', parseInt)
+  .option('--episode <number>', 'Episode number (required for series)', parseInt)
+  .option('--json', 'Output structured JSON logs', false)
+  .action(async (options: {
+    guildId: string;
+    channelId: string;
+    query: string;
+    type?: string;
+    season?: number;
+    episode?: number;
+    json: boolean;
+  }) => {
+    await withSignalHandler(async (signal) => {
+      const logLevel =
+        (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info';
+      const logger = createLogger(logLevel);
 
-    try {
+      const addonUrl = process.env['STREMIO_ADDON_URL'];
+      if (!addonUrl) {
+        throw new Error(
+          'STREMIO_ADDON_URL is required for play-search. ' +
+            'Set it to your Torrentio addon manifest URL (e.g. https://torrentio.strem.fun/…/manifest.json).'
+        );
+      }
+
+      // Validate content type if provided.
+      let contentType: 'movie' | 'series' | undefined;
+      if (options.type) {
+        if (options.type !== 'movie' && options.type !== 'series') {
+          throw new Error('--type must be "movie" or "series".');
+        }
+        contentType = options.type;
+      }
+
+      // Resolve the search query to a direct stream URL.
+      const resolved = await Effect.runPromise(
+        resolveSearchQuery(addonUrl, {
+          query: options.query,
+          type: contentType,
+          season: options.season,
+          episode: options.episode,
+        }, logger)
+      );
+
+      logger.info('Resolved content for streaming', {
+        name: resolved.contentName,
+        imdbId: resolved.imdbId,
+        quality: resolved.quality,
+        filename: resolved.filename,
+      });
+
+      // Feed the resolved URL into the standard streaming pipeline.
       await runStreamJob(
         options.guildId,
         options.channelId,
-        options.url,
-        abortController.signal
+        resolved.streamUrl,
+        signal
       );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`Fatal: ${message}\n`);
-      process.exitCode = 1;
-    } finally {
-      process.off('SIGINT', onSignal);
-      process.off('SIGTERM', onSignal);
-    }
+    });
+  });
+
+// ─── play-youtube ───────────────────────────────────────────────────
+program
+  .command('play-youtube')
+  .description(
+    'Search YouTube via yt-dlp, resolve a direct stream URL, and stream it'
+  )
+  .requiredOption('--guild-id <id>', 'Discord guild (server) ID')
+  .requiredOption('--channel-id <id>', 'Discord voice channel ID')
+  .requiredOption('--query <query>', 'YouTube search query (e.g. "lofi hip hop")')
+  .option('--json', 'Output structured JSON logs', false)
+  .action(async (options: {
+    guildId: string;
+    channelId: string;
+    query: string;
+    json: boolean;
+  }) => {
+    await withSignalHandler(async (signal) => {
+      const logLevel =
+        (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info';
+      const logger = createLogger(logLevel);
+
+      const ytdlpPath = process.env['YTDLP_PATH'] ?? 'yt-dlp';
+
+      // Resolve the search query to a direct stream URL.
+      const resolved = await Effect.runPromise(
+        resolveYouTubeQuery(ytdlpPath, options.query, logger)
+      );
+
+      logger.info('Resolved YouTube video for streaming', {
+        title: resolved.title,
+        videoId: resolved.videoId,
+        channel: resolved.channel,
+        durationSeconds: resolved.durationSeconds,
+      });
+
+      // Feed the resolved URL into the standard streaming pipeline.
+      // YouTube often returns separate video+audio streams — pass audioUrl
+      // so FFmpeg can merge them.
+      await runStreamJob(
+        options.guildId,
+        options.channelId,
+        resolved.streamUrl,
+        signal,
+        resolved.audioUrl
+      );
+    });
   });
 
 program.parse();
+
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+async function withSignalHandler(
+  fn: (signal: AbortSignal) => Promise<void>
+): Promise<void> {
+  const abortController = new AbortController();
+  const onSignal = () => {
+    abortController.abort(new Error('Received shutdown signal'));
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+
+  try {
+    await fn(abortController.signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Fatal: ${message}\n`);
+    process.exitCode = 1;
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+  }
+}
 
 async function runStreamJob(
   guildId: string,
   channelId: string,
   videoUrl: string,
-  abortSignal: AbortSignal
+  abortSignal: AbortSignal,
+  audioUrl?: string
 ): Promise<void> {
   const mainEffect = Effect.gen(function* () {
     const config = yield* ConfigService;
@@ -97,6 +223,23 @@ async function runStreamJob(
 
     // 5. Select transcode plan
     const plan = yield* media.selectPlan(probeResult);
+
+    // When a separate audioUrl is provided (e.g. YouTube split streams),
+    // the video URL has no audio track so ffprobe reports none.  Inject
+    // a default transcode audio plan so FFmpeg maps the second input.
+    if (audioUrl && !plan.audio) {
+      (plan as { audio?: unknown }).audio = {
+        mode: 'transcode' as const,
+        sourceCodec: 'aac',
+        sampleRate: 44100,
+        channels: 2,
+        targetCodec: 'opus' as const,
+        targetBitrateKbps: 128 as const,
+        targetSampleRate: 48_000 as const,
+        targetChannels: 2 as const,
+      };
+    }
+
     logger.info('Transcode plan selected', describeTranscodePlan(plan));
 
     // 6. Join voice channel
@@ -109,7 +252,8 @@ async function runStreamJob(
     const pipeline = yield* media.createPipeline(
       config.ffmpegPath,
       videoUrl,
-      plan
+      plan,
+      audioUrl
     );
 
     // 8. Create Go Live stream and play
@@ -174,6 +318,8 @@ async function runStreamJob(
     logLevel: (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info',
     ffmpegPath: process.env['FFMPEG_PATH'] ?? 'ffmpeg',
     ffprobePath: process.env['FFPROBE_PATH'] ?? 'ffprobe',
+    stremioAddonUrl: process.env['STREMIO_ADDON_URL'] ?? '',
+    ytdlpPath: process.env['YTDLP_PATH'] ?? 'yt-dlp',
   });
 
   const loggerForGateway = createLogger(

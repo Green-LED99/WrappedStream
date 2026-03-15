@@ -8,6 +8,11 @@ export type FfprobeStream = {
   avg_frame_rate?: string;
   sample_rate?: string;
   channels?: number;
+  index?: number;
+  tags?: {
+    language?: string;
+    title?: string;
+  };
 };
 
 export type FfprobeResult = {
@@ -17,6 +22,43 @@ export type FfprobeResult = {
     duration?: string;
   };
 };
+
+/** Subtitle codecs that FFmpeg's `subtitles` filter (libass) can burn in. */
+const TEXT_SUBTITLE_CODECS = new Set([
+  'subrip',
+  'ass',
+  'ssa',
+  'webvtt',
+  'mov_text',
+  'srt',
+  'text',
+]);
+
+/**
+ * Find the index (among subtitle streams only) of the first English
+ * text subtitle stream, if one exists.
+ *
+ * Returns `undefined` if no English text subtitle is found.
+ */
+export function findEnglishSubtitleIndex(
+  streams: FfprobeStream[]
+): number | undefined {
+  const subtitleStreams = streams.filter(
+    (s) => s.codec_type === 'subtitle'
+  );
+
+  for (let i = 0; i < subtitleStreams.length; i++) {
+    const sub = subtitleStreams[i]!;
+    const codec = sub.codec_name?.toLowerCase() ?? '';
+    const lang = sub.tags?.language?.toLowerCase() ?? '';
+
+    if (TEXT_SUBTITLE_CODECS.has(codec) && (lang === 'eng' || lang === 'en')) {
+      return i;
+    }
+  }
+
+  return undefined;
+}
 
 export async function probeMedia(
   ffprobePath: string,
@@ -32,7 +74,7 @@ export async function probeMedia(
         '-v',
         'error',
         '-show_entries',
-        'stream=codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels:format=format_name,duration',
+        'stream=index,codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
         '-show_streams',
         '-show_format',
         '-of',

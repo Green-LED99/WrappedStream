@@ -12,4 +12,6 @@ export class AppConfig extends Schema.Class<AppConfig>('AppConfig')({
   logLevel: Schema.optionalWith(LogLevelSchema, { default: () => 'info' as const }),
   ffmpegPath: Schema.optionalWith(Schema.String, { default: () => 'ffmpeg' }),
   ffprobePath: Schema.optionalWith(Schema.String, { default: () => 'ffprobe' }),
+  stremioAddonUrl: Schema.optionalWith(Schema.String, { default: () => '' }),
+  ytdlpPath: Schema.optionalWith(Schema.String, { default: () => 'yt-dlp' }),
 }) {}

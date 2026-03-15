@@ -104,4 +104,29 @@ describe('AppConfig schema validation', () => {
 
     await expect(Effect.runPromise(decode(raw))).rejects.toThrow();
   });
+
+  it('applies default ytdlpPath', async () => {
+    const raw = {
+      token: 'tok',
+      guildId: 'g',
+      channelId: 'c',
+      videoUrl: 'https://example.com/v.mp4',
+    };
+
+    const result = await Effect.runPromise(decode(raw));
+    expect(result.ytdlpPath).toBe('yt-dlp');
+  });
+
+  it('accepts explicit ytdlpPath', async () => {
+    const raw = {
+      token: 'tok',
+      guildId: 'g',
+      channelId: 'c',
+      videoUrl: 'https://example.com/v.mp4',
+      ytdlpPath: '/usr/local/bin/yt-dlp',
+    };
+
+    const result = await Effect.runPromise(decode(raw));
+    expect(result.ytdlpPath).toBe('/usr/local/bin/yt-dlp');
+  });
 });
