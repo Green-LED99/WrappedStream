@@ -11,13 +11,14 @@ import {
   LOW_POWER_VIDEO_MAX_BITRATE_KBPS,
   type TranscodePlanOptions,
 } from '../src/media/TranscodePlan.js';
-import { findEnglishSubtitleIndex, type FfprobeResult, type FfprobeStream } from '../src/media/Probe.js';
+import { findEnglishSubtitleIndex, findSubtitleIndex, findAudioStreamByLanguage, type FfprobeResult, type FfprobeStream } from '../src/media/Probe.js';
 import { buildFfmpegNutArgs } from '../src/media/FFmpegPipeline.js';
 
 const defaultOptions: TranscodePlanOptions = {
   encoder: 'libx264',
   subtitleBurnIn: 'auto',
   performanceProfile: 'default',
+  language: 'eng',
 };
 
 describe('parseFrameRate', () => {
@@ -403,6 +404,112 @@ describe('findEnglishSubtitleIndex', () => {
   });
 });
 
+describe('findSubtitleIndex', () => {
+  it('finds subtitle by 3-letter language code', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'jpn' } },
+    ];
+    expect(findSubtitleIndex(streams, 'jpn')).toBe(0);
+  });
+
+  it('matches 2-letter code against 3-letter stream tag', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'jpn' } },
+    ];
+    expect(findSubtitleIndex(streams, 'ja')).toBe(0);
+  });
+
+  it('matches 3-letter code against 2-letter stream tag', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'ass', codec_type: 'subtitle', tags: { language: 'fr' } },
+    ];
+    expect(findSubtitleIndex(streams, 'fre')).toBe(0);
+  });
+
+  it('returns undefined when no matching language', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'eng' } },
+    ];
+    expect(findSubtitleIndex(streams, 'jpn')).toBeUndefined();
+  });
+
+  it('picks correct index among multiple languages', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'h264', codec_type: 'video' },
+      { codec_name: 'aac', codec_type: 'audio' },
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'eng' } },
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'fre' } },
+      { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'jpn' } },
+    ];
+    expect(findSubtitleIndex(streams, 'fre')).toBe(1);
+    expect(findSubtitleIndex(streams, 'jpn')).toBe(2);
+  });
+});
+
+describe('findAudioStreamByLanguage', () => {
+  it('finds audio stream matching language', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'h264', codec_type: 'video' },
+      { codec_name: 'aac', codec_type: 'audio', index: 1, tags: { language: 'eng' } },
+      { codec_name: 'aac', codec_type: 'audio', index: 2, tags: { language: 'jpn' } },
+    ];
+    const result = findAudioStreamByLanguage(streams, 'jpn');
+    expect(result).toBeDefined();
+    expect(result?.index).toBe(2);
+  });
+
+  it('matches 2-letter code against 3-letter tag', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'aac', codec_type: 'audio', index: 1, tags: { language: 'jpn' } },
+    ];
+    expect(findAudioStreamByLanguage(streams, 'ja')).toBeDefined();
+  });
+
+  it('returns undefined when no matching language', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'aac', codec_type: 'audio', index: 1, tags: { language: 'eng' } },
+    ];
+    expect(findAudioStreamByLanguage(streams, 'jpn')).toBeUndefined();
+  });
+
+  it('returns undefined when audio has no language tag', () => {
+    const streams: FfprobeStream[] = [
+      { codec_name: 'aac', codec_type: 'audio', index: 1 },
+    ];
+    expect(findAudioStreamByLanguage(streams, 'eng')).toBeUndefined();
+  });
+});
+
+describe('selectTranscodePlan language-aware selection', () => {
+  it('selects French audio and subtitle when language is fre', () => {
+    const probe: FfprobeResult = {
+      streams: [
+        { codec_name: 'h264', codec_type: 'video', width: 1920, height: 1080, avg_frame_rate: '24/1' },
+        { codec_name: 'aac', codec_type: 'audio', index: 1, sample_rate: '44100', channels: 2, tags: { language: 'eng' } },
+        { codec_name: 'aac', codec_type: 'audio', index: 2, sample_rate: '44100', channels: 2, tags: { language: 'fre' } },
+        { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'eng' } },
+        { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'fre' } },
+      ],
+    };
+    const plan = selectTranscodePlan(probe, { ...defaultOptions, language: 'fre' });
+    expect(plan.audio?.audioStreamIndex).toBe(2);
+    expect(plan.subtitle?.streamIndex).toBe(1);
+  });
+
+  it('falls back to first audio when no language match', () => {
+    const probe: FfprobeResult = {
+      streams: [
+        { codec_name: 'h264', codec_type: 'video', width: 1920, height: 1080, avg_frame_rate: '24/1' },
+        { codec_name: 'aac', codec_type: 'audio', index: 1, sample_rate: '44100', channels: 2, tags: { language: 'eng' } },
+      ],
+    };
+    const plan = selectTranscodePlan(probe, { ...defaultOptions, language: 'kor' });
+    expect(plan.audio).toBeDefined();
+    expect(plan.audio?.audioStreamIndex).toBe(1);
+    expect(plan.subtitle).toBeUndefined();
+  });
+});
+
 describe('buildFfmpegNutArgs', () => {
   const basePlan = {
     video: {
@@ -513,6 +620,30 @@ describe('buildFfmpegNutArgs', () => {
     const args = buildFfmpegNutArgs('https://example.com/video.mkv', basePlan);
     expect(args).toContain('0:a:0?');
     expect(args).not.toContain('1:a:0');
+  });
+
+  it('maps audio by absolute stream index when audioStreamIndex is set', () => {
+    const planWithIndex = {
+      ...basePlan,
+      audio: { ...basePlan.audio, audioStreamIndex: 3 },
+    };
+    const args = buildFfmpegNutArgs('https://example.com/video.mkv', planWithIndex);
+    expect(args).toContain('0:3?');
+    expect(args).not.toContain('0:a:0?');
+  });
+
+  it('ignores audioStreamIndex when audioUrl is provided', () => {
+    const planWithIndex = {
+      ...basePlan,
+      audio: { ...basePlan.audio, audioStreamIndex: 3 },
+    };
+    const args = buildFfmpegNutArgs(
+      'https://example.com/video.mkv',
+      planWithIndex,
+      'https://example.com/audio.mp4'
+    );
+    expect(args).toContain('1:a:0');
+    expect(args).not.toContain('0:3?');
   });
 
   // ── New tests for copy mode and HW encoders ──

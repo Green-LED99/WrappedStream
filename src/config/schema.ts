@@ -26,4 +26,5 @@ export class AppConfig extends Schema.Class<AppConfig>('AppConfig')({
   videoEncoder: Schema.optionalWith(VideoEncoderSchema, { default: () => 'auto' as const }),
   subtitleBurnIn: Schema.optionalWith(SubtitleBurnInSchema, { default: () => 'auto' as const }),
   performanceProfile: Schema.optionalWith(PerformanceProfileSchema, { default: () => 'default' as const }),
+  language: Schema.optionalWith(Schema.String, { default: () => 'eng' }),
 }) {}

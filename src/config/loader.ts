@@ -29,6 +29,7 @@ export const ConfigServiceFromEnv = Layer.effect(
       videoEncoder: process.env['VIDEO_ENCODER'],
       subtitleBurnIn: process.env['SUBTITLE_BURN_IN'],
       performanceProfile: process.env['PERFORMANCE_PROFILE'],
+      language: process.env['LANGUAGE'],
     };
 
     const config = yield* decode(raw).pipe(
@@ -59,6 +60,7 @@ export function ConfigServiceLive(raw: {
   videoEncoder?: string;
   subtitleBurnIn?: string;
   performanceProfile?: string;
+  language?: string;
 }): Layer.Layer<ConfigService, ConfigError> {
   return Layer.effect(
     ConfigService,

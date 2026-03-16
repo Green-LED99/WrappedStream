@@ -92,7 +92,15 @@ export function buildFfmpegNutArgs(
 
   if (plan.audio) {
     // If we have a separate audio input, map from input 1; otherwise from input 0.
-    args.push('-map', audioUrl ? '1:a:0' : '0:a:0?');
+    // When the audio plan specifies a stream index (language-selected), use the
+    // absolute stream index so FFmpeg picks the correct track.
+    if (audioUrl) {
+      args.push('-map', '1:a:0');
+    } else if (plan.audio.audioStreamIndex != null) {
+      args.push('-map', `0:${plan.audio.audioStreamIndex}?`);
+    } else {
+      args.push('-map', '0:a:0?');
+    }
   } else {
     args.push('-an');
   }

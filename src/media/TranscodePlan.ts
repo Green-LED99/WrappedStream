@@ -1,5 +1,6 @@
 import {
-  findEnglishSubtitleIndex,
+  findSubtitleIndex,
+  findAudioStreamByLanguage,
   type FfprobeResult,
   type FfprobeStream,
 } from './Probe.js';
@@ -46,12 +47,14 @@ export type VideoPlan =
 export type AudioPlan =
   | {
       mode: 'copy';
+      audioStreamIndex?: number;
       sourceCodec: string;
       sampleRate: number;
       channels: number;
     }
   | {
       mode: 'transcode';
+      audioStreamIndex?: number;
       sourceCodec: string;
       sampleRate: number;
       channels: number;
@@ -77,6 +80,7 @@ export interface TranscodePlanOptions {
   encoder: VideoEncoder;
   subtitleBurnIn: 'auto' | 'never';
   performanceProfile: 'default' | 'low-power';
+  language: string;
 }
 
 export function parseFrameRate(value: string | undefined): number {
@@ -100,7 +104,9 @@ export function selectTranscodePlan(
   options: TranscodePlanOptions
 ): TranscodePlan {
   const videoStream = selectStream(probe.streams, 'video');
-  const audioStream = probe.streams.find((item) => item.codec_type === 'audio');
+  const audioStream =
+    findAudioStreamByLanguage(probe.streams, options.language) ??
+    probe.streams.find((item) => item.codec_type === 'audio');
 
   const videoSourceCodec = normalizeCodec(videoStream.codec_name);
   const videoSourceHeight = videoStream.height ?? 0;
@@ -117,12 +123,12 @@ export function selectTranscodePlan(
     : LOW_CPU_VIDEO_MAX_BITRATE_KBPS;
 
   // Detect subtitles (unless disabled).
-  const engSubIndex =
+  const subIndex =
     options.subtitleBurnIn === 'never'
       ? undefined
-      : findEnglishSubtitleIndex(probe.streams);
+      : findSubtitleIndex(probe.streams, options.language);
   const subtitle: SubtitlePlan | undefined =
-    engSubIndex != null ? { streamIndex: engSubIndex } : undefined;
+    subIndex != null ? { streamIndex: subIndex } : undefined;
 
   const needsSubtitleBurnIn = subtitle != null;
 
@@ -248,15 +254,19 @@ function selectAudioPlan(stream: FfprobeStream): AudioPlan {
     channels > 0 &&
     channels <= LOW_CPU_AUDIO_CHANNELS;
 
+  const indexPart = stream.index != null ? { audioStreamIndex: stream.index } : {};
+
   return canCopy
     ? {
         mode: 'copy',
+        ...indexPart,
         sourceCodec,
         sampleRate,
         channels,
       }
     : {
         mode: 'transcode',
+        ...indexPart,
         sourceCodec,
         sampleRate,
         channels,
