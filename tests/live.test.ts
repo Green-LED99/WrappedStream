@@ -97,11 +97,21 @@ describe('buildFfmpegNutArgs', () => {
     subtitle: null,
   };
 
-  it('includes -extension_picky 0 in all builds', () => {
+  it('includes -extension_picky 0 for HLS URLs', () => {
     const args = buildFfmpegNutArgs('http://example.com/stream.m3u8', basePlan);
     const idx = args.indexOf('-extension_picky');
     expect(idx).toBeGreaterThan(-1);
     expect(args[idx + 1]).toBe('0');
+  });
+
+  it('includes -extension_picky 0 for playlist URLs', () => {
+    const args = buildFfmpegNutArgs('https://cdn.example.com/playlist/123/load-playlist', basePlan);
+    expect(args).toContain('-extension_picky');
+  });
+
+  it('omits -extension_picky for direct MP4 URLs', () => {
+    const args = buildFfmpegNutArgs('http://example.com/video.mp4', basePlan);
+    expect(args).not.toContain('-extension_picky');
   });
 
   it('inserts httpHeaders before -i when provided', () => {

@@ -69,7 +69,15 @@ export async function probeMedia(
   const stderr: Buffer[] = [];
 
   await new Promise<void>((resolve, reject) => {
-    const args = ['-v', 'error', '-extension_picky', '0'];
+    const args = ['-v', 'error'];
+
+    // -extension_picky 0 is only needed for HLS streams with non-standard
+    // segment extensions (.txt).  Added in FFmpeg 7.0 — older versions
+    // (e.g. Debian Bookworm's FFmpeg 5.x) do not recognise it.
+    const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
+    if (isHls) {
+      args.push('-extension_picky', '0');
+    }
 
     if (httpHeaders && Object.keys(httpHeaders).length > 0) {
       const headerStr = Object.entries(httpHeaders)

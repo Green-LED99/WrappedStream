@@ -39,7 +39,16 @@ export function buildFfmpegNutArgs(
   audioUrl?: string,
   httpHeaders?: Record<string, string>
 ): string[] {
-  const args = ['-v', 'warning', '-extension_picky', '0'];
+  const args = ['-v', 'warning'];
+
+  // -extension_picky 0 is only needed for HLS streams that use non-standard
+  // segment file extensions (e.g. .txt instead of .ts).  The flag was added
+  // in FFmpeg 7.0 and does not exist in older versions (Debian Bookworm
+  // ships FFmpeg 5.x), so we only include it for HLS/playlist URLs.
+  const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
+  if (isHls) {
+    args.push('-extension_picky', '0');
+  }
 
   if (httpHeaders && Object.keys(httpHeaders).length > 0) {
     const headerStr = Object.entries(httpHeaders)
@@ -51,7 +60,6 @@ export function buildFfmpegNutArgs(
   // Reconnect flags are only useful for direct HTTP streams (mp4, mkv).
   // For HLS (m3u8 / playlist URLs), the HLS demuxer handles segment
   // fetching internally — reconnect flags cause it to hang on EOF.
-  const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
   if (!isHls) {
     args.push(
       '-reconnect',
