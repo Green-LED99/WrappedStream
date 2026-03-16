@@ -7,6 +7,7 @@ import { probeMedia, type FfprobeResult } from './Probe.js';
 import {
   selectTranscodePlan,
   type TranscodePlan,
+  type TranscodePlanOptions,
 } from './TranscodePlan.js';
 import {
   createFfmpegNutProcess,
@@ -15,6 +16,10 @@ import {
 import { demuxNutStream } from './Demuxer.js';
 import { VideoStream } from './VideoStream.js';
 import { AudioStream } from './AudioStream.js';
+import {
+  detectEncoder,
+  type EncoderCapabilities,
+} from './EncoderDetect.js';
 
 export class MediaService extends Context.Tag('MediaService')<
   MediaService,
@@ -25,8 +30,13 @@ export class MediaService extends Context.Tag('MediaService')<
       httpHeaders?: Record<string, string>
     ) => Effect.Effect<FfprobeResult, MediaError>;
     readonly selectPlan: (
-      probe: FfprobeResult
+      probe: FfprobeResult,
+      options: TranscodePlanOptions
     ) => Effect.Effect<TranscodePlan, MediaError>;
+    readonly detectEncoder: (
+      ffmpegPath: string,
+      preference: string
+    ) => Effect.Effect<EncoderCapabilities, MediaError>;
     readonly createPipeline: (
       ffmpegPath: string,
       url: string,
@@ -54,9 +64,22 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
         }),
     }),
 
-  selectPlan: (probeResult: FfprobeResult) =>
+  selectPlan: (probeResult: FfprobeResult, options: TranscodePlanOptions) =>
     Effect.try({
-      try: () => selectTranscodePlan(probeResult),
+      try: () => selectTranscodePlan(probeResult, options),
+      catch: (error) =>
+        new MediaError({
+          message: error instanceof Error ? error.message : String(error),
+        }),
+    }),
+
+  detectEncoder: (ffmpegPath: string, preference: string) =>
+    Effect.tryPromise({
+      try: () =>
+        detectEncoder(
+          ffmpegPath,
+          preference as 'auto' | 'h264_nvmpi' | 'h264_v4l2m2m' | 'libx264'
+        ),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),
@@ -101,6 +124,10 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           audioStream.syncStream = undefined;
           audio.stream.pipe(audioStream);
         }
+
+        videoStream.on('stats', (stats) => {
+          logger.debug('Video pipeline stats', stats);
+        });
 
         video.stream.pipe(videoStream);
 

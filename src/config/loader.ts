@@ -26,6 +26,9 @@ export const ConfigServiceFromEnv = Layer.effect(
       ffprobePath: process.env['FFPROBE_PATH'],
       stremioAddonUrl: process.env['STREMIO_ADDON_URL'],
       ytdlpPath: process.env['YTDLP_PATH'],
+      videoEncoder: process.env['VIDEO_ENCODER'],
+      subtitleBurnIn: process.env['SUBTITLE_BURN_IN'],
+      performanceProfile: process.env['PERFORMANCE_PROFILE'],
     };
 
     const config = yield* decode(raw).pipe(
@@ -53,6 +56,9 @@ export function ConfigServiceLive(raw: {
   ffprobePath?: string;
   stremioAddonUrl?: string;
   ytdlpPath?: string;
+  videoEncoder?: string;
+  subtitleBurnIn?: string;
+  performanceProfile?: string;
 }): Layer.Layer<ConfigService, ConfigError> {
   return Layer.effect(
     ConfigService,
