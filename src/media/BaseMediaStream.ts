@@ -12,6 +12,15 @@ type PacketLike = {
   free?: () => void;
 };
 
+export interface PipelineStats {
+  framesProcessed: number;
+  lateFrames: number;
+  maxLatenessMs: number;
+  maxSendMs: number;
+}
+
+const STATS_INTERVAL = 300;
+
 export class BaseMediaStream extends Writable {
   private ptsValue?: number;
   private readonly syncTolerance = 20;
@@ -20,6 +29,13 @@ export class BaseMediaStream extends Writable {
   private startPts?: number;
   private syncEnabled = true;
   private syncTarget: BaseMediaStream | undefined;
+
+  private statsData: PipelineStats = {
+    framesProcessed: 0,
+    lateFrames: 0,
+    maxLatenessMs: 0,
+    maxSendMs: 0,
+  };
 
   public constructor(
     private readonly type: 'video' | 'audio',
@@ -45,6 +61,10 @@ export class BaseMediaStream extends Writable {
     return this.ptsValue;
   }
 
+  public get stats(): Readonly<PipelineStats> {
+    return { ...this.statsData };
+  }
+
   protected async sendFrame(_frame: Uint8Array, _frameTimeMs: number): Promise<void> {
     throw new Error(`${this.type} sendFrame must be implemented by a subclass.`);
   }
@@ -65,8 +85,17 @@ export class BaseMediaStream extends Writable {
         (Number(packet.duration || 0n) / packet.timeBase.den) *
         packet.timeBase.num *
         1000;
+
+      const sendStart = performance.now();
       await this.sendFrame(packet.data, frameTimeMs);
       const endSend = performance.now();
+      const sendDuration = endSend - sendStart;
+
+      // Update stats
+      this.statsData.framesProcessed += 1;
+      if (sendDuration > this.statsData.maxSendMs) {
+        this.statsData.maxSendMs = sendDuration;
+      }
 
       this.ptsValue =
         (Number(packet.pts || 0n) / packet.timeBase.den) *
@@ -80,6 +109,20 @@ export class BaseMediaStream extends Writable {
       const targetElapsedMs = this.ptsValue - this.startPts + frameTimeMs;
       const actualElapsedMs = endSend - this.startTime;
       const sleepDuration = Math.max(0, targetElapsedMs - actualElapsedMs);
+
+      // Track late frames
+      if (sleepDuration === 0 && actualElapsedMs > targetElapsedMs) {
+        const lateness = actualElapsedMs - targetElapsedMs;
+        this.statsData.lateFrames += 1;
+        if (lateness > this.statsData.maxLatenessMs) {
+          this.statsData.maxLatenessMs = lateness;
+        }
+      }
+
+      // Emit stats periodically
+      if (this.statsData.framesProcessed % STATS_INTERVAL === 0) {
+        this.emit('stats', this.stats);
+      }
 
       if (this.noSleepMode || sleepDuration === 0) {
         callback();

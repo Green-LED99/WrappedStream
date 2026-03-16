@@ -97,47 +97,54 @@ export function buildFfmpegNutArgs(
     args.push('-an');
   }
 
-  args.push(
-    '-threads:v',
-    String(plan.video.threads),
-    '-c:v',
-    'libx264',
-    '-preset',
-    'fast',
-    '-tune',
-    'zerolatency',
-    '-pix_fmt',
-    'yuv420p'
-  );
+  // ── Video codec ──────────────────────────────────────────────────────
+  if (plan.video.mode === 'copy') {
+    args.push('-c:v', 'copy');
+  } else {
+    const { encoder } = plan.video;
+    args.push('-c:v', encoder);
 
-  // Build the video filter chain.
-  // Order: scale first (work on smaller frames), then burn subtitles.
-  const filters = [...plan.video.filters];
+    if (encoder === 'libx264') {
+      args.push(
+        '-preset', plan.video.preset ?? 'fast',
+        '-tune', 'zerolatency',
+      );
+      args.push('-threads:v', String(plan.video.threads));
+    }
 
-  if (plan.subtitle != null) {
-    const escaped = escapeSubtitlePath(url);
-    filters.push(`subtitles=${escaped}:si=${plan.subtitle.streamIndex}`);
+    // All encoders (SW and HW) need pixel format
+    args.push('-pix_fmt', 'yuv420p');
+
+    // Build the video filter chain.
+    // Order: scale first (work on smaller frames), then burn subtitles.
+    const filters = [...plan.video.filters];
+
+    if (plan.subtitle != null) {
+      const escaped = escapeSubtitlePath(url);
+      filters.push(`subtitles=${escaped}:si=${plan.subtitle.streamIndex}`);
+    }
+
+    if (filters.length > 0) {
+      args.push('-vf', filters.join(','));
+    }
+
+    args.push(
+      '-r',
+      String(plan.video.targetFps),
+      '-b:v',
+      `${plan.video.targetBitrateKbps}k`,
+      '-maxrate:v',
+      `${plan.video.maxBitrateKbps}k`,
+      '-bufsize:v',
+      `${plan.video.targetBitrateKbps}k`,
+      '-bf',
+      '0',
+      '-force_key_frames',
+      'expr:gte(t,n_forced*1)'
+    );
   }
 
-  if (filters.length > 0) {
-    args.push('-vf', filters.join(','));
-  }
-
-  args.push(
-    '-r',
-    String(plan.video.targetFps),
-    '-b:v',
-    `${plan.video.targetBitrateKbps}k`,
-    '-maxrate:v',
-    `${plan.video.maxBitrateKbps}k`,
-    '-bufsize:v',
-    `${plan.video.targetBitrateKbps}k`,
-    '-bf',
-    '0',
-    '-force_key_frames',
-    'expr:gte(t,n_forced*1)'
-  );
-
+  // ── Audio codec ──────────────────────────────────────────────────────
   if (!plan.audio) {
     args.push('-f', 'nut', 'pipe:1');
     return args;
