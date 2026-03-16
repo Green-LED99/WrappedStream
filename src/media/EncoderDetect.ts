@@ -8,34 +8,103 @@ export interface EncoderCapabilities {
   selected: VideoEncoder;
 }
 
-const KNOWN_ENCODERS: VideoEncoder[] = ['h264_nvmpi', 'h264_v4l2m2m', 'libx264'];
+// Order matters: h264_nvmpi is Jetson-specific and reliable when installed.
+// libx264 is preferred over h264_v4l2m2m because the V4L2 M2M encoder is
+// often reported as available by FFmpeg but fails silently at runtime on
+// many ARM boards (missing /dev/video* device, broken driver, etc.).
+const KNOWN_ENCODERS: VideoEncoder[] = ['h264_nvmpi', 'libx264', 'h264_v4l2m2m'];
+
+// Encoders that need a runtime probe (test-encode) before trusting them.
+// libx264 is always reliable — no probe needed.
+const NEEDS_PROBE: Set<VideoEncoder> = new Set(['h264_nvmpi', 'h264_v4l2m2m']);
 
 export async function detectEncoder(
   ffmpegPath: string,
   preference: 'auto' | VideoEncoder
 ): Promise<EncoderCapabilities> {
   const output = await runFfmpegEncoders(ffmpegPath);
-  const available = KNOWN_ENCODERS.filter((enc) => output.includes(enc));
+  const listed = KNOWN_ENCODERS.filter((enc) => output.includes(enc));
 
   if (preference !== 'auto') {
-    if (!available.includes(preference)) {
+    if (!listed.includes(preference)) {
       throw new Error(
         `Requested encoder '${preference}' is not available in ffmpeg. ` +
-          `Available: ${available.join(', ') || 'none (only libx264 as implicit fallback)'}`
+          `Available: ${listed.join(', ') || 'none (only libx264 as implicit fallback)'}`
       );
     }
-    return { available, selected: preference };
+    // Even explicit requests get a probe for HW encoders.
+    if (NEEDS_PROBE.has(preference)) {
+      const works = await probeEncoder(ffmpegPath, preference);
+      if (!works) {
+        throw new Error(
+          `Requested encoder '${preference}' is listed by ffmpeg but failed ` +
+            `a test encode. The hardware encoder device may not be accessible.`
+        );
+      }
+    }
+    return { available: listed, selected: preference };
   }
 
-  // Auto-detect: prefer HW encoders in order
+  // Auto-detect: try each encoder in priority order.  For HW encoders,
+  // verify they actually work by test-encoding a single frame.
   for (const enc of KNOWN_ENCODERS) {
-    if (available.includes(enc)) {
-      return { available, selected: enc };
+    if (!listed.includes(enc)) continue;
+
+    if (!NEEDS_PROBE.has(enc)) {
+      return { available: listed, selected: enc };
+    }
+
+    const works = await probeEncoder(ffmpegPath, enc);
+    if (works) {
+      return { available: listed, selected: enc };
     }
   }
 
-  // libx264 should always be available, but guard anyway
-  return { available, selected: 'libx264' };
+  // libx264 should always be available, but guard anyway.
+  return { available: listed, selected: 'libx264' };
+}
+
+/**
+ * Test-encode a single black frame to verify the encoder actually works at
+ * runtime.  This catches hardware encoders that are listed in `ffmpeg
+ * -encoders` but fail because the V4L2 device is missing, the driver is
+ * broken, or permissions are wrong.
+ *
+ * Runs: ffmpeg -f lavfi -i color=black:s=64x64:d=0.04 -c:v <enc> -f null -
+ * Timeout: 5 seconds.
+ */
+function probeEncoder(ffmpegPath: string, encoder: VideoEncoder): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      ffmpegPath,
+      [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-f', 'lavfi',
+        '-i', 'color=black:s=64x64:d=0.04:r=1',
+        '-frames:v', '1',
+        '-c:v', encoder,
+        '-f', 'null',
+        '-',
+      ],
+      { stdio: ['ignore', 'ignore', 'ignore'] }
+    );
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve(false);
+    }, 5000);
+
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+
+    child.once('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
 }
 
 function runFfmpegEncoders(ffmpegPath: string): Promise<string> {

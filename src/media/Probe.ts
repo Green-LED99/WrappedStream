@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 export type FfprobeStream = {
   codec_name?: string;
   codec_type?: string;
+  profile?: string;
   width?: number;
   height?: number;
   avg_frame_rate?: string;
@@ -88,7 +89,7 @@ export async function probeMedia(
 
     args.push(
       '-show_entries',
-      'stream=index,codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
+      'stream=index,codec_name,codec_type,profile,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
       '-show_streams',
       '-show_format',
       '-of',

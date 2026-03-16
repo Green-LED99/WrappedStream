@@ -48,6 +48,7 @@ describe('parseFrameRate', () => {
 describe('selectTranscodePlan', () => {
   function makeProbe(overrides?: {
     videoCodec?: string;
+    videoProfile?: string;
     videoWidth?: number;
     videoHeight?: number;
     videoFps?: string;
@@ -60,6 +61,7 @@ describe('selectTranscodePlan', () => {
       {
         codec_name: overrides?.videoCodec ?? 'h264',
         codec_type: 'video',
+        profile: overrides?.videoProfile,
         width: overrides?.videoWidth ?? 1920,
         height: overrides?.videoHeight ?? 1080,
         avg_frame_rate: overrides?.videoFps ?? '30/1',
@@ -89,10 +91,11 @@ describe('selectTranscodePlan', () => {
     expect(plan.usesTranscode).toBe(true);
   });
 
-  it('selects copy for 720p H264 at 24fps (eligible source)', () => {
+  it('selects copy for Baseline 720p H264 at 24fps (eligible source)', () => {
     const plan = selectTranscodePlan(
       makeProbe({
         videoCodec: 'h264',
+        videoProfile: 'Baseline',
         videoHeight: 720,
         videoFps: '24/1',
         audioCodec: 'opus',
@@ -104,6 +107,31 @@ describe('selectTranscodePlan', () => {
     expect(plan.video.mode).toBe('copy');
   });
 
+  it('transcodes H264 High profile even at 720p 24fps (B-frames possible)', () => {
+    const plan = selectTranscodePlan(
+      makeProbe({
+        videoCodec: 'h264',
+        videoProfile: 'High',
+        videoHeight: 720,
+        videoFps: '24/1',
+      }),
+      defaultOptions
+    );
+    expect(plan.video.mode).toBe('transcode');
+  });
+
+  it('transcodes H264 with unknown profile (B-frames possible)', () => {
+    const plan = selectTranscodePlan(
+      makeProbe({
+        videoCodec: 'h264',
+        videoHeight: 720,
+        videoFps: '24/1',
+      }),
+      defaultOptions
+    );
+    expect(plan.video.mode).toBe('transcode');
+  });
+
   it('selects transcode for VP9 source', () => {
     const plan = selectTranscodePlan(
       makeProbe({ videoCodec: 'vp9', videoHeight: 480, videoFps: '24/1' }),
@@ -112,10 +140,11 @@ describe('selectTranscodePlan', () => {
     expect(plan.video.mode).toBe('transcode');
   });
 
-  it('selects copy for 480p H264 at 24fps (under target)', () => {
+  it('selects copy for Baseline 480p H264 at 24fps (under target)', () => {
     const plan = selectTranscodePlan(
       makeProbe({
         videoCodec: 'h264',
+        videoProfile: 'Constrained Baseline',
         videoHeight: 480,
         videoFps: '24/1',
       }),
@@ -281,7 +310,7 @@ describe('selectTranscodePlan', () => {
   it('allows copy when subtitleBurnIn is never even with English subtitles', () => {
     const probe: FfprobeResult = {
       streams: [
-        { codec_name: 'h264', codec_type: 'video', width: 1280, height: 720, avg_frame_rate: '24/1' },
+        { codec_name: 'h264', codec_type: 'video', profile: 'Baseline', width: 1280, height: 720, avg_frame_rate: '24/1' },
         { codec_name: 'aac', codec_type: 'audio', sample_rate: '44100', channels: 2 },
         { codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'eng' } },
       ],
@@ -319,9 +348,9 @@ describe('selectTranscodePlan', () => {
     }
   });
 
-  it('copy mode eligible with low-power profile (24fps target)', () => {
+  it('copy mode eligible with low-power profile (Baseline 24fps target)', () => {
     const plan = selectTranscodePlan(
-      makeProbe({ videoCodec: 'h264', videoHeight: 720, videoFps: '24/1' }),
+      makeProbe({ videoCodec: 'h264', videoProfile: 'Baseline', videoHeight: 720, videoFps: '24/1' }),
       { ...defaultOptions, performanceProfile: 'low-power' }
     );
     expect(plan.video.mode).toBe('copy');
@@ -329,7 +358,7 @@ describe('selectTranscodePlan', () => {
 
   it('transcode for H264 at 30fps with low-power profile (exceeds 24fps target)', () => {
     const plan = selectTranscodePlan(
-      makeProbe({ videoCodec: 'h264', videoHeight: 720, videoFps: '30/1' }),
+      makeProbe({ videoCodec: 'h264', videoProfile: 'Baseline', videoHeight: 720, videoFps: '30/1' }),
       { ...defaultOptions, performanceProfile: 'low-power' }
     );
     expect(plan.video.mode).toBe('transcode');
