@@ -21,3 +21,23 @@ services:
     #     command: play-live --guild-id 123 --channel-id 456 --query "nba knicks"
     command: play-url --guild-id ${DISCORD_GUILD_ID} --channel-id ${DISCORD_CHANNEL_ID} --url "${VIDEO_URL}"
     restart: "no"
+
+    # ── Jetson Nano / ARM resource limits ──────────────────────────
+    # Uncomment the sections below when running on a Jetson Nano to
+    # expose the hardware encoder and cap resource usage.
+    #
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 6G
+    #       cpus: "4.0"
+    #
+    # # Required for h264_nvmpi hardware encoder access on Jetson:
+    # devices:
+    #   - /dev/nvhost-ctrl
+    #   - /dev/nvhost-ctrl-gpu
+    #   - /dev/nvhost-prof-gpu
+    #   - /dev/nvhost-msenc
+    #   - /dev/nvmap
+    #   - /dev/nvhost-gpu
+    #   - /dev/nvhost-as-gpu

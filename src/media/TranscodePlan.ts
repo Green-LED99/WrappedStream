@@ -16,10 +16,11 @@ export const LOW_CPU_AUDIO_BITRATE_KBPS = 128;
 export const LOW_CPU_AUDIO_SAMPLE_RATE = 48_000;
 export const LOW_CPU_AUDIO_CHANNELS = 2;
 
-// Low-power profile constants (matches DiscordStream)
+// Low-power profile constants (optimised for Jetson Nano / RPi class devices)
 export const LOW_POWER_TARGET_FPS = 24;
 export const LOW_POWER_VIDEO_TARGET_BITRATE_KBPS = 1800;
 export const LOW_POWER_VIDEO_MAX_BITRATE_KBPS = 3500;
+export const LOW_POWER_AUDIO_BITRATE_KBPS = 96;
 
 export type VideoPlan =
   | {
@@ -59,7 +60,7 @@ export type AudioPlan =
       sampleRate: number;
       channels: number;
       targetCodec: 'opus';
-      targetBitrateKbps: typeof LOW_CPU_AUDIO_BITRATE_KBPS;
+      targetBitrateKbps: number;
       targetSampleRate: typeof LOW_CPU_AUDIO_SAMPLE_RATE;
       targetChannels: typeof LOW_CPU_AUDIO_CHANNELS;
     };
@@ -167,6 +168,13 @@ export function selectTranscodePlan(
           : 'fast'
         : undefined;
 
+    // When a hardware encoder is handling video, the CPU is free for
+    // filter processing (scaling, subtitle burn-in) so we can afford
+    // more filter threads.  Software encoding needs those cores itself.
+    const isHwEncoder =
+      options.encoder === 'h264_nvmpi' || options.encoder === 'h264_v4l2m2m';
+    const threads = isHwEncoder ? 3 : LOW_CPU_VIDEO_THREADS;
+
     video = {
       mode: 'transcode',
       sourceCodec: videoSourceCodec,
@@ -179,12 +187,12 @@ export function selectTranscodePlan(
       targetFps,
       targetBitrateKbps: targetBitrate,
       maxBitrateKbps: maxBitrate,
-      threads: LOW_CPU_VIDEO_THREADS,
+      threads,
       filters: videoFilters,
     };
   }
 
-  const audio = audioStream ? selectAudioPlan(audioStream) : undefined;
+  const audio = audioStream ? selectAudioPlan(audioStream, isLowPower) : undefined;
 
   return {
     video,
@@ -244,7 +252,7 @@ export function describeTranscodePlan(plan: TranscodePlan): Record<string, unkno
   };
 }
 
-function selectAudioPlan(stream: FfprobeStream): AudioPlan {
+function selectAudioPlan(stream: FfprobeStream, isLowPower: boolean): AudioPlan {
   const sourceCodec = normalizeCodec(stream.codec_name);
   const sampleRate = Number(stream.sample_rate ?? '0');
   const channels = stream.channels ?? 0;
@@ -255,6 +263,12 @@ function selectAudioPlan(stream: FfprobeStream): AudioPlan {
     channels <= LOW_CPU_AUDIO_CHANNELS;
 
   const indexPart = stream.index != null ? { audioStreamIndex: stream.index } : {};
+
+  // Low-power mode uses 96 kbps Opus (saves ~25% CPU on the audio encoder
+  // while remaining transparent for voice/music at Discord's typical quality).
+  const audioBitrate = isLowPower
+    ? LOW_POWER_AUDIO_BITRATE_KBPS
+    : LOW_CPU_AUDIO_BITRATE_KBPS;
 
   return canCopy
     ? {
@@ -271,7 +285,7 @@ function selectAudioPlan(stream: FfprobeStream): AudioPlan {
         sampleRate,
         channels,
         targetCodec: 'opus',
-        targetBitrateKbps: LOW_CPU_AUDIO_BITRATE_KBPS,
+        targetBitrateKbps: audioBitrate,
         targetSampleRate: LOW_CPU_AUDIO_SAMPLE_RATE,
         targetChannels: LOW_CPU_AUDIO_CHANNELS,
       };

@@ -10,7 +10,8 @@ import { Effect } from 'effect';
 import { YouTubeError } from '../errors/index.js';
 import type { YtdlpVideoInfo, ResolvedYouTubeVideo } from './types.js';
 
-const YTDLP_TIMEOUT_MS = 30_000;
+// yt-dlp spawns a Python process which is slow on ARM — give it more time.
+const YTDLP_TIMEOUT_MS = 45_000;
 
 /**
  * Parse raw yt-dlp JSON output into a `ResolvedYouTubeVideo`.
@@ -74,11 +75,14 @@ export function parseYtdlpOutput(raw: string): ResolvedYouTubeVideo {
  * Search YouTube for a query and extract the direct stream URL
  * in a single yt-dlp invocation.
  *
- * Runs: `yt-dlp --dump-json --no-playlist -f "bv*[height<=1080]+ba/b" "ytsearch1:<query>"`
+ * Runs: `yt-dlp --dump-json --no-playlist -S "res:720,+codec:h264" -f "bv*[height<=720]+ba/b" "ytsearch1:<query>"`
  *
- * The format selector picks separate video (≤1080p) + audio HTTPS streams,
- * falling back to a single combined stream. This avoids HLS manifests which
- * require YouTube-specific cookies that FFmpeg cannot provide.
+ * The format selector picks separate video (≤720p H.264) + audio HTTPS
+ * streams, falling back to a single combined stream.  Capping at 720p
+ * matches the transcode target and avoids downloading 1080p video that
+ * would be downscaled anyway — saving bandwidth and CPU on low-power
+ * devices (Jetson Nano / RPi).  The `-S` sort prefers H.264 to avoid
+ * decoding VP9/AV1 in software.
  */
 export function searchAndResolve(
   ytdlpPath: string,
@@ -107,8 +111,15 @@ async function runYtdlp(
       [
         '--dump-json',
         '--no-playlist',
+        // Prefer H.264 codec to avoid VP9/AV1 software decode overhead.
+        '-S', 'res:720,+codec:h264',
         '-f',
-        'bv*[height<=1080]+ba/b',
+        'bv*[height<=720]+ba/b',
+        // Skip thumbnails and metadata that we don't use.
+        '--no-write-thumbnail',
+        '--no-cache-dir',
+        // Prevent hangs on slow network connections.
+        '--socket-timeout', '15',
         `ytsearch1:${query}`,
       ],
       {

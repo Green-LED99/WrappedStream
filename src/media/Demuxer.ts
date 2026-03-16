@@ -143,7 +143,10 @@ export async function demuxNutStream(
 
   const demuxer = await imported.Demuxer.open(input, {
     format: 'nut',
-    bufferSize: 8192,
+    // 32 KB read buffer — reduces syscall frequency vs the default 8 KB.
+    // On ARM (Jetson Nano / RPi), syscall overhead is proportionally
+    // more expensive so larger reads amortise the cost.
+    bufferSize: 32_768,
     options: {
       fflags: 'nobuffer',
     },
@@ -192,8 +195,12 @@ export async function demuxNutStream(
 
   const filteredCodecParameters = (videoFilters.at(-1)?.outputCodecParameters ??
     videoSource.codecpar) as VideoCodecParametersLike;
-  const videoPipe = new PassThrough({ objectMode: true, highWaterMark: 64 });
-  const audioPipe = new PassThrough({ objectMode: true, highWaterMark: 64 });
+  // Object-mode highWaterMark controls how many packets can queue before
+  // back-pressure kicks in.  Video frames average ~30-50 KB each so 16
+  // packets ≈ 0.5-0.8 MB per pipe — enough to absorb jitter without
+  // consuming excessive RAM on memory-constrained devices (Jetson 8 GB).
+  const videoPipe = new PassThrough({ objectMode: true, highWaterMark: 16 });
+  const audioPipe = new PassThrough({ objectMode: true, highWaterMark: 16 });
 
   const packetIterator = demuxer.packets();
 

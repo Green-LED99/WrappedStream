@@ -41,6 +41,17 @@ export function buildFfmpegNutArgs(
 ): string[] {
   const args = ['-v', 'warning'];
 
+  // ── Input analysis tuning ──────────────────────────────────────────
+  // Reduce FFmpeg's initial analysis window to speed up stream startup.
+  // Default is 5s / 5MB which is excessive for a known-good stream.
+  args.push(
+    '-analyzeduration', '2000000',  // 2 seconds (in microseconds)
+    '-probesize', '1048576',        // 1 MB
+  );
+
+  // Minimize input buffering for lower latency on constrained devices.
+  args.push('-fflags', 'nobuffer');
+
   // -extension_picky 0 is only needed for HLS streams that use non-standard
   // segment file extensions (e.g. .txt instead of .ts).  The flag was added
   // in FFmpeg 7.0 and does not exist in older versions (Debian Bookworm
@@ -118,6 +129,22 @@ export function buildFfmpegNutArgs(
         '-tune', 'zerolatency',
       );
       args.push('-threads:v', String(plan.video.threads));
+    } else if (encoder === 'h264_nvmpi') {
+      // Jetson Nano hardware encoder tuning:
+      // - num_capture_buffers: reduce from default 10 to 4 to cut pipeline
+      //   latency (fewer queued frames) while keeping the HW block fed.
+      // - profile baseline: disables B-frames at the encoder level for
+      //   lower latency (complements the -bf 0 flag below).
+      // - rc cbr: constant bitrate avoids look-ahead buffering.
+      args.push(
+        '-num_capture_buffers', '4',
+        '-profile:v', 'baseline',
+        '-rc', 'cbr',
+      );
+    } else if (encoder === 'h264_v4l2m2m') {
+      // Raspberry Pi / V4L2 hardware encoder — limit output buffers to
+      // reduce memory usage while keeping the pipeline fed.
+      args.push('-num_output_buffers', '16');
     }
 
     // All encoders (SW and HW) need pixel format
@@ -144,17 +171,16 @@ export function buildFfmpegNutArgs(
       '-maxrate:v',
       `${plan.video.maxBitrateKbps}k`,
       '-bufsize:v',
-      `${plan.video.targetBitrateKbps}k`,
+      `${plan.video.maxBitrateKbps}k`,
       '-bf',
       '0',
-      '-force_key_frames',
-      'expr:gte(t,n_forced*1)'
+      '-g', String(plan.video.targetFps),
     );
   }
 
   // ── Audio codec ──────────────────────────────────────────────────────
   if (!plan.audio) {
-    args.push('-f', 'nut', 'pipe:1');
+    args.push('-flush_packets', '1', '-f', 'nut', 'pipe:1');
     return args;
   }
 
@@ -173,7 +199,8 @@ export function buildFfmpegNutArgs(
     );
   }
 
-  args.push('-f', 'nut', 'pipe:1');
+  // Flush each packet immediately to the pipe — reduces muxing latency.
+  args.push('-flush_packets', '1', '-f', 'nut', 'pipe:1');
   return args;
 }
 

@@ -116,6 +116,12 @@ export async function probeMedia(
   await new Promise<void>((resolve, reject) => {
     const args = ['-v', 'error'];
 
+    // Reduce probe analysis window for faster startup on slow ARM CPUs.
+    args.push(
+      '-analyzeduration', '2000000',  // 2 seconds
+      '-probesize', '1048576',        // 1 MB
+    );
+
     // -extension_picky 0 is only needed for HLS streams with non-standard
     // segment extensions (.txt).  Added in FFmpeg 7.0 — older versions
     // (e.g. Debian Bookworm's FFmpeg 5.x) do not recognise it.
