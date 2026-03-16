@@ -6,6 +6,7 @@ export type VideoEncoder = HwEncoder | 'libx264';
 export interface EncoderCapabilities {
   available: VideoEncoder[];
   selected: VideoEncoder;
+  ffmpegMajorVersion: number;
 }
 
 // Order matters: h264_nvmpi is Jetson-specific and reliable when installed.
@@ -22,7 +23,10 @@ export async function detectEncoder(
   ffmpegPath: string,
   preference: 'auto' | VideoEncoder
 ): Promise<EncoderCapabilities> {
-  const output = await runFfmpegEncoders(ffmpegPath);
+  const [output, majorVersion] = await Promise.all([
+    runFfmpegEncoders(ffmpegPath),
+    detectFfmpegMajorVersion(ffmpegPath),
+  ]);
   const listed = KNOWN_ENCODERS.filter((enc) => output.includes(enc));
 
   if (preference !== 'auto') {
@@ -42,7 +46,7 @@ export async function detectEncoder(
         );
       }
     }
-    return { available: listed, selected: preference };
+    return { available: listed, selected: preference, ffmpegMajorVersion: majorVersion };
   }
 
   // Auto-detect: try each encoder in priority order.  For HW encoders,
@@ -51,17 +55,17 @@ export async function detectEncoder(
     if (!listed.includes(enc)) continue;
 
     if (!NEEDS_PROBE.has(enc)) {
-      return { available: listed, selected: enc };
+      return { available: listed, selected: enc, ffmpegMajorVersion: majorVersion };
     }
 
     const works = await probeEncoder(ffmpegPath, enc);
     if (works) {
-      return { available: listed, selected: enc };
+      return { available: listed, selected: enc, ffmpegMajorVersion: majorVersion };
     }
   }
 
   // libx264 should always be available, but guard anyway.
-  return { available: listed, selected: 'libx264' };
+  return { available: listed, selected: 'libx264', ffmpegMajorVersion: majorVersion };
 }
 
 /**
@@ -126,6 +130,33 @@ function runFfmpegEncoders(ffmpegPath: string): Promise<string> {
 
     child.once('error', (err) => {
       reject(new Error(`Failed to run ffmpeg -encoders: ${err.message}`));
+    });
+  });
+}
+
+/**
+ * Detect the FFmpeg major version by running `ffmpeg -version` and parsing the
+ * first line (e.g. "ffmpeg version 5.1.6-0+deb12u1 ...").  Returns 0 if the
+ * version cannot be determined (safe: callers treat 0 as "old FFmpeg").
+ */
+export function detectFfmpegMajorVersion(ffmpegPath: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(ffmpegPath, ['-version'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    const chunks: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+
+    child.once('exit', () => {
+      const output = Buffer.concat(chunks).toString('utf8');
+      // Matches "ffmpeg version N.x.y" or "ffmpeg version n7.1-..."
+      const match = /version\s+n?(\d+)/i.exec(output);
+      resolve(match ? Number(match[1]) : 0);
+    });
+
+    child.once('error', () => {
+      resolve(0);
     });
   });
 }

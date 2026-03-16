@@ -97,16 +97,26 @@ describe('buildFfmpegNutArgs', () => {
     subtitle: null,
   };
 
-  it('includes -extension_picky 0 for HLS URLs', () => {
-    const args = buildFfmpegNutArgs('http://example.com/stream.m3u8', basePlan);
+  it('includes -extension_picky 0 for HLS URLs on FFmpeg >= 7', () => {
+    const args = buildFfmpegNutArgs('http://example.com/stream.m3u8', basePlan, undefined, undefined, 7);
     const idx = args.indexOf('-extension_picky');
     expect(idx).toBeGreaterThan(-1);
     expect(args[idx + 1]).toBe('0');
   });
 
-  it('includes -extension_picky 0 for playlist URLs', () => {
-    const args = buildFfmpegNutArgs('https://cdn.example.com/playlist/123/load-playlist', basePlan);
+  it('includes -extension_picky 0 for playlist URLs on FFmpeg >= 7', () => {
+    const args = buildFfmpegNutArgs('https://cdn.example.com/playlist/123/load-playlist', basePlan, undefined, undefined, 7);
     expect(args).toContain('-extension_picky');
+  });
+
+  it('omits -extension_picky for HLS URLs on FFmpeg < 7', () => {
+    const args = buildFfmpegNutArgs('http://example.com/stream.m3u8', basePlan, undefined, undefined, 5);
+    expect(args).not.toContain('-extension_picky');
+  });
+
+  it('omits -extension_picky for HLS URLs when version unknown', () => {
+    const args = buildFfmpegNutArgs('http://example.com/stream.m3u8', basePlan);
+    expect(args).not.toContain('-extension_picky');
   });
 
   it('omits -extension_picky for direct MP4 URLs', () => {

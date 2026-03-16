@@ -271,7 +271,7 @@ async function runStreamJob(
 
     // 5. Probe media
     logger.info('Probing media source', { url: videoUrl });
-    const probeResult = yield* media.probe(config.ffprobePath, videoUrl, httpHeaders);
+    const probeResult = yield* media.probe(config.ffprobePath, videoUrl, httpHeaders, encoderInfo.ffmpegMajorVersion);
 
     // 6. Select transcode plan
     const plan = yield* media.selectPlan(probeResult, {
@@ -310,7 +310,8 @@ async function runStreamJob(
       videoUrl,
       plan,
       audioUrl,
-      httpHeaders
+      httpHeaders,
+      encoderInfo.ffmpegMajorVersion
     );
 
     // 9. Create Go Live stream and play

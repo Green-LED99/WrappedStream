@@ -37,16 +37,17 @@ export function buildFfmpegNutArgs(
   url: string,
   plan: TranscodePlan,
   audioUrl?: string,
-  httpHeaders?: Record<string, string>
+  httpHeaders?: Record<string, string>,
+  ffmpegMajorVersion?: number
 ): string[] {
   const args = ['-v', 'warning'];
 
   // -extension_picky 0 is only needed for HLS streams that use non-standard
   // segment file extensions (e.g. .txt instead of .ts).  The flag was added
   // in FFmpeg 7.0 and does not exist in older versions (Debian Bookworm
-  // ships FFmpeg 5.x), so we only include it for HLS/playlist URLs.
+  // ships FFmpeg 5.x).  Only include it when we know FFmpeg >= 7.
   const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
-  if (isHls) {
+  if (isHls && (ffmpegMajorVersion ?? 0) >= 7) {
     args.push('-extension_picky', '0');
   }
 
@@ -174,9 +175,10 @@ export function createFfmpegNutProcess(
   url: string,
   plan: TranscodePlan,
   audioUrl?: string,
-  httpHeaders?: Record<string, string>
+  httpHeaders?: Record<string, string>,
+  ffmpegMajorVersion?: number
 ): FfmpegNutProcess {
-  const args = buildFfmpegNutArgs(url, plan, audioUrl, httpHeaders);
+  const args = buildFfmpegNutArgs(url, plan, audioUrl, httpHeaders, ffmpegMajorVersion);
   const startedAt = performance.now();
   const child = spawn(ffmpegPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
