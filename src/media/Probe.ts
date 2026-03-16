@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 export type FfprobeStream = {
   codec_name?: string;
   codec_type?: string;
+  profile?: string;
   width?: number;
   height?: number;
   avg_frame_rate?: string;
@@ -108,7 +109,8 @@ export function findAudioStreamByLanguage(
 export async function probeMedia(
   ffprobePath: string,
   url: string,
-  httpHeaders?: Record<string, string>
+  httpHeaders?: Record<string, string>,
+  ffmpegMajorVersion?: number
 ): Promise<FfprobeResult> {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
@@ -124,9 +126,10 @@ export async function probeMedia(
 
     // -extension_picky 0 is only needed for HLS streams with non-standard
     // segment extensions (.txt).  Added in FFmpeg 7.0 — older versions
-    // (e.g. Debian Bookworm's FFmpeg 5.x) do not recognise it.
+    // (e.g. Debian Bookworm's FFmpeg 5.x) do not recognise it and will
+    // exit with "Failed to set value '0' for option 'extension_picky'".
     const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
-    if (isHls) {
+    if (isHls && (ffmpegMajorVersion ?? 0) >= 7) {
       args.push('-extension_picky', '0');
     }
 
@@ -139,7 +142,7 @@ export async function probeMedia(
 
     args.push(
       '-show_entries',
-      'stream=index,codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
+      'stream=index,codec_name,codec_type,profile,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
       '-show_streams',
       '-show_format',
       '-of',

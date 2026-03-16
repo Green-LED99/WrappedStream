@@ -27,7 +27,8 @@ export class MediaService extends Context.Tag('MediaService')<
     readonly probe: (
       ffprobePath: string,
       url: string,
-      httpHeaders?: Record<string, string>
+      httpHeaders?: Record<string, string>,
+      ffmpegMajorVersion?: number
     ) => Effect.Effect<FfprobeResult, MediaError>;
     readonly selectPlan: (
       probe: FfprobeResult,
@@ -42,7 +43,8 @@ export class MediaService extends Context.Tag('MediaService')<
       url: string,
       plan: TranscodePlan,
       audioUrl?: string,
-      httpHeaders?: Record<string, string>
+      httpHeaders?: Record<string, string>,
+      ffmpegMajorVersion?: number
     ) => Effect.Effect<FfmpegNutProcess, MediaError>;
     readonly playStream: (
       input: NodeJS.ReadableStream,
@@ -55,9 +57,9 @@ export class MediaService extends Context.Tag('MediaService')<
 >() {}
 
 export const MediaServiceLive = Layer.succeed(MediaService, {
-  probe: (ffprobePath: string, url: string, httpHeaders?: Record<string, string>) =>
+  probe: (ffprobePath: string, url: string, httpHeaders?: Record<string, string>, ffmpegMajorVersion?: number) =>
     Effect.tryPromise({
-      try: () => probeMedia(ffprobePath, url, httpHeaders),
+      try: () => probeMedia(ffprobePath, url, httpHeaders, ffmpegMajorVersion),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),
@@ -86,9 +88,9 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
         }),
     }),
 
-  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string, httpHeaders?: Record<string, string>) =>
+  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string, httpHeaders?: Record<string, string>, ffmpegMajorVersion?: number) =>
     Effect.try({
-      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl, httpHeaders),
+      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl, httpHeaders, ffmpegMajorVersion),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),

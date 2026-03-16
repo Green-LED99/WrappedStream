@@ -46,7 +46,7 @@ What do you want to stream?
 Streams any HTTP(S) video URL to Discord. Use when you already have a direct link to a video file or HLS playlist.
 
 ```bash
-discord-stream play-url \
+node dist/src/index.js play-url \
   --guild-id <GUILD_ID> \
   --channel-id <CHANNEL_ID> \
   --url <VIDEO_URL>
@@ -109,7 +109,7 @@ discord-stream play-search \
 Searches YouTube using yt-dlp, extracts the direct stream URL, and streams it.
 
 ```bash
-discord-stream play-youtube \
+node dist/src/index.js play-youtube \
   --guild-id <GUILD_ID> \
   --channel-id <CHANNEL_ID> \
   --query "lofi hip hop"
@@ -137,7 +137,7 @@ discord-stream play-youtube \
 Finds a live sports event by keyword and streams it from sportsurge.ws. No API key or external account required.
 
 ```bash
-discord-stream play-live \
+node dist/src/index.js play-live \
   --guild-id <GUILD_ID> \
   --channel-id <CHANNEL_ID> \
   --query "nba knicks"
@@ -181,6 +181,90 @@ cp .env.example .env
 
 ---
 
+## Performance Tuning
+
+The transcode pipeline is configurable for low-power devices like Jetson Nano, Raspberry Pi, or any ARM SBC.
+
+### Video Encoder Selection (`VIDEO_ENCODER`)
+
+At startup, the tool probes `ffmpeg -encoders` to discover available H.264 encoders. The `auto` setting picks the best available in this order:
+
+| Priority | Encoder | Description | CPU Impact |
+|----------|---------|-------------|------------|
+| 1 | `h264_nvmpi` | NVIDIA Jetson hardware encoder (requires [jetson-ffmpeg](https://github.com/jocover/jetson-ffmpeg)) | Near zero |
+| 2 | `h264_v4l2m2m` | V4L2 Memory-to-Memory hardware encoder (generic Linux HW) | Near zero |
+| 3 | `libx264` | Software encoder (always available) | High |
+
+To force a specific encoder: `VIDEO_ENCODER=h264_nvmpi`. If the requested encoder is not found in FFmpeg, the tool exits with an error rather than silently falling back.
+
+**Jetson Nano setup:** You need an FFmpeg build that includes `h264_nvmpi`. The standard Debian/Ubuntu `ffmpeg` package does **not** include it. Install [jetson-ffmpeg](https://github.com/jocover/jetson-ffmpeg), then set `FFMPEG_PATH` to point to the patched binary.
+
+### Video Copy Mode
+
+When the source video is already H.264 at or below the target resolution and frame rate, FFmpeg passes through the original encoded frames without re-encoding (`-c:v copy`). This uses zero CPU for the video track. Copy mode is selected automatically — no configuration needed.
+
+Copy mode is **not** used when:
+- The source codec is not H.264 (e.g., VP9, HEVC, AV1)
+- The source resolution exceeds 720p
+- The source frame rate exceeds the target (30fps default, 24fps in low-power)
+- Subtitle burn-in is active (rendering text onto frames requires decoding)
+
+To maximize copy-mode eligibility, set `SUBTITLE_BURN_IN=never` to prevent subtitle rendering from forcing a transcode.
+
+### Performance Profiles (`PERFORMANCE_PROFILE`)
+
+| Profile | Target FPS | Video Bitrate | Max Bitrate | libx264 Preset | Use Case |
+|---------|-----------|---------------|-------------|----------------|----------|
+| `default` | 30 | 2500 kbps | 4500 kbps | `fast` | Desktop / server with spare CPU |
+| `low-power` | 24 | 1800 kbps | 3500 kbps | `superfast` | Jetson Nano, Raspberry Pi, ARM SBCs |
+
+The `low-power` profile reduces CPU usage by roughly 3-4x when software encoding (libx264) is used: `superfast` is 2-3x faster than `fast`, and 24fps produces 20% fewer frames than 30fps.
+
+**Note:** The profile only affects software encoding. Hardware encoders handle any supported resolution/fps with near-zero CPU regardless of profile.
+
+### Recommended Settings by Device
+
+**Jetson Nano (4GB):**
+```bash
+VIDEO_ENCODER=auto              # auto-detects h264_nvmpi if jetson-ffmpeg is installed
+PERFORMANCE_PROFILE=low-power   # fallback to superfast/24fps if HW encoder unavailable
+SUBTITLE_BURN_IN=never          # avoid forced transcode from subtitle rendering
+```
+
+**Raspberry Pi 4/5:**
+```bash
+VIDEO_ENCODER=auto              # auto-detects h264_v4l2m2m
+PERFORMANCE_PROFILE=low-power
+SUBTITLE_BURN_IN=never
+```
+
+**Desktop / Cloud server:**
+```bash
+# Defaults are fine — no env vars needed
+# VIDEO_ENCODER=auto (uses libx264)
+# PERFORMANCE_PROFILE=default (30fps, 2500kbps, fast preset)
+# SUBTITLE_BURN_IN=auto (burns English subs if present)
+```
+
+### Pipeline Stats
+
+Set `LOG_LEVEL=debug` to see per-stream diagnostics emitted every ~10 seconds:
+
+```json
+{
+  "framesProcessed": 300,
+  "lateFrames": 2,
+  "maxLatenessMs": 45.3,
+  "maxSendMs": 12.1
+}
+```
+
+- `lateFrames` — frames delivered behind schedule (pacing engine couldn't keep up). Sustained late frames indicate CPU saturation.
+- `maxLatenessMs` — worst-case frame delay in ms. Values >100ms cause visible stuttering.
+- `maxSendMs` — longest time spent in a single `sendFrame` call. High values indicate WebRTC/network backpressure.
+
+---
+
 ## Installation
 
 ### Docker (recommended)
@@ -195,6 +279,8 @@ docker run --rm --env-file .env \
   --url "https://example.com/video.mp4"
 ```
 
+**Note:** The default Docker image uses Debian Bookworm's FFmpeg, which only includes `libx264` (software encoding). For Jetson Nano hardware encoding, you need a custom image with [jetson-ffmpeg](https://github.com/jocover/jetson-ffmpeg) installed and `FFMPEG_PATH` pointing to the patched binary.
+
 ### Docker Compose
 
 ```bash
@@ -205,7 +291,7 @@ docker compose up --build
 ### Local (macOS / Linux)
 
 **System requirements:**
-- Node.js 22 or 23 (not 24)
+- Node.js 22 or 23 (not 24 — native addon compatibility)
 - FFmpeg with libx264 and libopus
 - yt-dlp (for `play-youtube` only)
 
@@ -368,7 +454,7 @@ src/
 └── utils/                   # Structured JSON logger
 
 vendor/
-└── libdave/                 # Vendored DAVE WASM module
+└── libdave/                 # Vendored DAVE WASM module (do NOT remove)
     ├── libdave.wasm
     ├── libdave.js
     └── libdave.d.ts

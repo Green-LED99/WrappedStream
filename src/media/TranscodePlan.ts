@@ -133,10 +133,21 @@ export function selectTranscodePlan(
 
   const needsSubtitleBurnIn = subtitle != null;
 
-  // Video copy eligibility: source is H.264 at or below target resolution and
-  // frame rate, and no subtitle burn-in is required.
+  // H.264 profiles that guarantee no B-frames.  Main and High profiles CAN
+  // use B-frames, which break RTP packetization (the H264RtpPacketizer does
+  // not handle decode-order reordering).  Only allow copy when the source
+  // profile is known to be B-frame-free.
+  const videoProfile = videoStream.profile?.toLowerCase() ?? '';
+  const isBFrameFreeProfile =
+    videoProfile === 'baseline' ||
+    videoProfile === 'constrained baseline' ||
+    videoProfile === '66'; // ffprobe numeric profile_idc for Baseline
+
+  // Video copy eligibility: source is H.264 Baseline at or below target
+  // resolution and frame rate, with no subtitle burn-in required.
   const canCopyVideo =
     videoSourceCodec === 'h264' &&
+    isBFrameFreeProfile &&
     videoSourceHeight > 0 &&
     videoSourceHeight <= targetHeight &&
     videoSourceFps > 0 &&
