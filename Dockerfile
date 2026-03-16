@@ -63,7 +63,10 @@ COPY vendor/ vendor/
 ENV LOG_LEVEL=info \
     FFMPEG_PATH=ffmpeg \
     FFPROBE_PATH=ffprobe \
-    YTDLP_PATH=yt-dlp
+    YTDLP_PATH=yt-dlp \
+    # Cap V8 heap at 4 GB so Node doesn't consume all available RAM on an
+    # 8 GB Jetson Nano, leaving headroom for FFmpeg, WASM, and the OS.
+    NODE_OPTIONS="--max-old-space-size=4096"
 
 ENTRYPOINT ["node", "dist/src/index.js"]
 CMD ["play-url"]

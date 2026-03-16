@@ -275,7 +275,10 @@ export abstract class BaseMediaConnection extends EventEmitter {
           active: true,
           quality: 100,
           rtx_ssrc: rtxSsrc,
-          max_bitrate: 10_000 * 1_000,
+          // 4.5 Mbps — matches the max bitrate from the transcode plan.
+          // Advertising 10 Mbps (the previous value) to Discord is wasteful
+          // when the encoder will never produce more than ~4.5 Mbps.
+          max_bitrate: 4_500 * 1_000,
           max_framerate: attributes.fps,
           max_resolution: {
             type: 'fixed',

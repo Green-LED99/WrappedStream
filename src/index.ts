@@ -278,6 +278,7 @@ async function runStreamJob(
       encoder: encoderInfo.selected,
       subtitleBurnIn: config.subtitleBurnIn,
       performanceProfile: config.performanceProfile,
+      language: config.language,
     });
 
     // When a separate audioUrl is provided (e.g. YouTube split streams),
@@ -381,6 +382,7 @@ async function runStreamJob(
     videoEncoder: process.env['VIDEO_ENCODER'] ?? 'auto',
     subtitleBurnIn: process.env['SUBTITLE_BURN_IN'] ?? 'auto',
     performanceProfile: process.env['PERFORMANCE_PROFILE'] ?? 'default',
+    language: process.env['LANGUAGE'] ?? 'eng',
   });
 
   const loggerForGateway = createLogger(
