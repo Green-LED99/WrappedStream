@@ -69,10 +69,20 @@ export function buildFfmpegNutArgs(
   }
 
   if (httpHeaders && Object.keys(httpHeaders).length > 0) {
+    // FFmpeg requires User-Agent via the dedicated -user_agent flag rather
+    // than the generic -headers option, because the HLS demuxer only
+    // propagates -user_agent to sub-requests (variant playlists, segments).
+    const userAgent = httpHeaders['User-Agent'];
+    if (userAgent) {
+      args.push('-user_agent', userAgent);
+    }
     const headerStr = Object.entries(httpHeaders)
+      .filter(([k]) => k !== 'User-Agent')
       .map(([k, v]) => `${k}: ${v}\r\n`)
       .join('');
-    args.push('-headers', headerStr);
+    if (headerStr.length > 0) {
+      args.push('-headers', headerStr);
+    }
   }
 
   // Fast seek: place -ss before -i so FFmpeg seeks by keyframe in the

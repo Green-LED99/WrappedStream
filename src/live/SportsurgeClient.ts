@@ -4,7 +4,7 @@ const BASE_URL = 'https://sportsurge.ws';
 const EMBED_HOST = 'https://gooz.aapmains.net';
 const FETCH_TIMEOUT_MS = 10_000;
 
-const USER_AGENT =
+export const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
 /**
@@ -91,6 +91,7 @@ export async function resolveStreamUrl(
   return {
     streamUrl,
     headers: {
+      'User-Agent': USER_AGENT,
       Referer: `${EMBED_HOST}/`,
       Origin: EMBED_HOST,
     },
