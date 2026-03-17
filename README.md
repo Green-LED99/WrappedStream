@@ -29,7 +29,7 @@ A CLI tool that resolves a stream source, transcodes to H.264 Constrained Baseli
 | **Multi-Source** | Direct URLs, YouTube search (yt-dlp), Stremio/Torrentio/Real-Debrid movies, and live sports |
 | **ARM Optimized** | Three performance profiles, precision timing with hybrid spin-wait, and tuned buffer sizes for Cortex-A57 |
 | **Audio/Video Sync** | Shared wall-clock reference with proportional drift correction (20ms tolerance) |
-| **Process Safety** | Guaranteed FFmpeg cleanup via `finally` blocks, stream destruction to unblock demuxer, graceful SIGTERM→SIGKILL |
+| **Process Safety** | Guaranteed FFmpeg cleanup via `finally` blocks, awaited demuxer teardown, graceful SIGTERM→SIGKILL |
 
 ---
 
@@ -93,7 +93,7 @@ discord-stream play-url-with-commands \
 | `/playtime` | Display current position, duration, and progress |
 | `/next-episode` | Skip to the next episode (series auto-play) |
 
-The seek/skip mechanism is fully in-process: the `PlaybackStateManager` fires a restart event, the stream loop gracefully stops the current FFmpeg pipeline (`SIGTERM` with 2s `SIGKILL` fallback), and starts a new one at the target seek position — all within the same Discord voice connection.
+The seek/skip mechanism is fully in-process: the `PlaybackStateManager` fires a restart event, the stream loop aborts the current pipeline, awaits full demuxer cleanup (native handles closed, bitstream filters freed), then starts a new FFmpeg pipeline at the target seek position — all within the same Discord voice connection. No arbitrary delays or sleep hacks; cleanup completion is deterministic.
 
 ### `play-search` — Stream movies/TV via Stremio
 
@@ -295,7 +295,7 @@ src/
 │   ├── EncoderDetect.ts     # HW encoder auto-detection with runtime probe
 │   ├── TranscodePlan.ts     # Profile-aware transcode/copy decision engine
 │   ├── FFmpegPipeline.ts    # FFmpeg process with NUT output, fast seek, graceful stop
-│   ├── Demuxer.ts           # NUT demuxer with H.264 bitstream filter chain
+│   ├── Demuxer.ts           # NUT demuxer with H.264 bitstream filters + awaitable cleanup
 │   ├── BaseMediaStream.ts   # Writable stream with PTS timing and precision sleep
 │   ├── VideoStream.ts       # H.264 frame sender (extends BaseMediaStream)
 │   ├── AudioStream.ts       # Opus frame sender (extends BaseMediaStream)
@@ -451,7 +451,7 @@ Series auto-play fetches the full episode list from Cinemeta's meta endpoint, fi
 
 ### yt-dlp Integration
 
-YouTube resolution uses three player clients (`mweb,ios,android_vr`) for reliable H.264 DASH stream availability. Format selection prefers separate video+audio HTTPS streams to avoid VP9/AV1 software decoding and AAC→Opus transcoding:
+YouTube resolution uses four player clients (`mweb,ios,android_vr,web_safari`) for reliable H.264 DASH stream availability. Format selection prefers separate video+audio HTTPS streams to avoid VP9/AV1 software decoding and AAC→Opus transcoding:
 
 ```
 bv[vcodec~='^(avc|h264)'][height<=720]+ba[acodec=opus]  # H.264 video + Opus audio
@@ -488,10 +488,11 @@ The `BaseMediaStream` uses a hybrid sleep strategy to compensate for ARM's coars
 
 ### Process Lifecycle
 
-FFmpeg child processes are guaranteed to be cleaned up in all exit paths:
+FFmpeg child processes and native demuxer handles are guaranteed to be cleaned up in all exit paths:
 
 - The stream loop uses a `finally` block that calls `pipeline.stop()` after every iteration (natural end, seek restart, error, or abort). `stop()` sends `SIGTERM` with a 2-second `SIGKILL` fallback.
-- The media service explicitly destroys all PassThrough pipes and writable streams on completion, error, or abort. This unblocks the NUT demuxer's background packet loop, which then closes its native handles and bitstream filters.
+- The media service explicitly destroys all PassThrough pipes and writable streams on completion, error, or abort. The NUT demuxer's background packet loop detects destroyed pipes via `.destroyed` guards, exits cleanly, closes native handles and bitstream filters, then resolves a `done` Promise.
+- All cleanup paths in `MediaService.playStream()` await the demuxer's `done` Promise before settling, ensuring native resources are fully released before the next pipeline starts. A `settle()` guard prevents double-resolution races.
 - The global `SIGINT`/`SIGTERM` handler propagates an abort signal through the entire pipeline chain.
 
 ### Voice Gateway Close Code Handling
@@ -502,7 +503,8 @@ FFmpeg child processes are guaranteed to be cleaned up in all exit paths:
 | 4006 | Refresh | Request fresh connection via gateway |
 | 4009 | Refresh | Request fresh connection via gateway |
 | 4015 | Resume | Voice server crash — reconnect and resume |
-| 4001-4005, 4007, 4011+ | Fatal | Emit fatal error; higher-level code retries |
+| 4001-4003, 4005 | Resume | Transient errors (unknown opcode, decode error, race conditions) — reconnect and resume |
+| 4004, 4007, 4011+ | Fatal | Emit fatal error; higher-level code retries |
 
 ### Gateway Close Code Handling
 
@@ -526,5 +528,5 @@ All protocol implementations have been audited against their official documentat
 | Discord Gateway v9 | [discord-api-docs](https://github.com/discord/discord-api-docs) | Opcodes 0-11, 18-22 verified. Slash command registration, intents, interaction handling verified |
 | DAVE E2EE | [dave-protocol](https://github.com/discord/dave-protocol) + [libdave](https://github.com/discord/libdave) | MLS 1.0, P256_AES128GCM_SHA256_P256, key ratchets, epoch transitions verified |
 | FFmpeg | [ffmpeg.org](https://ffmpeg.org/ffmpeg.html) | All encoder flags, filter syntax, muxer options, seek placement verified |
-| yt-dlp | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Format selection, extractor args (`mweb,ios,android_vr`), sort strings verified |
+| yt-dlp | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Format selection, extractor args (`mweb,ios,android_vr,web_safari`), sort strings verified |
 | RTP/SDP | RFC 3550, RFC 7587 | PT 120/101/102, profile-level-id=42e01f, header extensions, RTCP-FB verified |

@@ -198,18 +198,29 @@ program
         currentEpisode = next.episode;
 
         // Resolve the next episode's stream URL.
+        // Save fields that resolveContent doesn't set so the loop
+        // can continue beyond the second episode.
+        const savedAddonBase = resolved.addonBase;
+        const savedImdbId = resolved.imdbId;
+        const savedContentName = resolved.contentName;
+        const savedContentType = resolved.contentType;
+
         resolved = await Effect.runPromise(
           resolveContent(
-            resolved.addonBase,
+            savedAddonBase,
             'series',
-            resolved.imdbId,
-            resolved.contentName,
+            savedImdbId,
+            savedContentName,
             next.season,
             next.episode
           )
         );
         resolved.season = next.season;
         resolved.episode = next.episode;
+        resolved.addonBase = savedAddonBase;
+        resolved.imdbId = savedImdbId;
+        resolved.contentName = savedContentName;
+        resolved.contentType = savedContentType;
       }
     });
   });
@@ -527,12 +538,13 @@ async function runStreamJob(opts: StreamJobOptions): Promise<void> {
               keepPlaying = false;
             } catch (streamErr) {
               if (nextSeek !== null) {
-                // Seek/skip was requested — restart at new position
+                // Seek/skip was requested — restart at new position.
+                // The demuxer loop has already been fully awaited by
+                // MediaService before the promise rejected, so the old
+                // native handles are closed and we can start fresh.
                 logger.info('Restarting stream at new position', { seekSeconds: nextSeek });
                 currentSeek = nextSeek;
                 nextSeek = null;
-                // Brief pause to let streams drain
-                await new Promise((r) => setTimeout(r, 500));
                 // Loop continues → new pipeline at currentSeek
               } else if (opts.abortSignal.aborted) {
                 logger.info('Global shutdown signal received');

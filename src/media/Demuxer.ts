@@ -85,10 +85,17 @@ function parseOpusPacketDuration(frame: Uint8Array): number {
   return frameSize * (secondByte & 0b11_1111);
 }
 
+export type DemuxResult = {
+  video: VideoStreamInfo;
+  audio?: AudioStreamInfo;
+  /** Resolves when the background packet-iteration loop finishes (naturally or via abort). */
+  done: Promise<void>;
+};
+
 export async function demuxNutStream(
   input: NodeJS.ReadableStream,
   logger: Logger
-): Promise<{ video: VideoStreamInfo; audio?: AudioStreamInfo }> {
+): Promise<DemuxResult> {
   const imported = (await import('node-av')) as {
     Demuxer: {
       open(
@@ -221,7 +228,7 @@ export async function demuxNutStream(
     audioPipe.end();
   };
 
-  void (async () => {
+  const done = (async () => {
     try {
       while (true) {
         const next = await packetIterator.next();
@@ -229,7 +236,9 @@ export async function demuxNutStream(
           const flushedPackets = await applyBitstreamFilters(videoFilters, null);
           for (const packet of flushedPackets) {
             if (packet) {
+              if (videoPipe.destroyed) break;
               if (!videoPipe.write(packet)) {
+                if (videoPipe.destroyed) break;
                 await once(videoPipe, 'drain');
               }
             }
@@ -246,13 +255,16 @@ export async function demuxNutStream(
         }
 
         if (packet.streamIndex === videoSource.index) {
+          if (videoPipe.destroyed) { packet.free(); break; }
           const filteredPackets = await applyBitstreamFilters(
             videoFilters,
             packet
           );
           for (const filteredPacket of filteredPackets) {
             if (filteredPacket) {
+              if (videoPipe.destroyed) break;
               if (!videoPipe.write(filteredPacket)) {
+                if (videoPipe.destroyed) break;
                 await once(videoPipe, 'drain');
               }
             }
@@ -261,10 +273,12 @@ export async function demuxNutStream(
         }
 
         if (audioSource && packet.streamIndex === audioSource.index) {
+          if (audioPipe.destroyed) { packet.free(); break; }
           if (!packet.duration && packet.data) {
             packet.duration = BigInt(parseOpusPacketDuration(packet.data));
           }
           if (!audioPipe.write(packet)) {
+            if (audioPipe.destroyed) break;
             await once(audioPipe, 'drain');
           }
           continue;
@@ -273,6 +287,15 @@ export async function demuxNutStream(
         packet.free();
       }
     } catch (error) {
+      // When streams are destroyed during a seek/skip, write() and
+      // once(pipe, 'drain') throw ERR_STREAM_DESTROYED.  This is
+      // expected and not an error — just exit the loop cleanly.
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === 'ERR_STREAM_DESTROYED' || code === 'ERR_STREAM_PREMATURE_CLOSE') {
+        logger.debug('Demuxer loop ended (stream destroyed)');
+        cleanup();
+        return;
+      }
       const message =
         error instanceof Error ? error.message : String(error);
       logger.error('NUT demux failed', { message });
@@ -299,7 +322,7 @@ export async function demuxNutStream(
       }
     : undefined;
 
-  return audio ? { video, audio } : { video };
+  return audio ? { video, audio, done } : { video, done };
 }
 
 export function createChainedBitstreamFilters(

@@ -13,7 +13,7 @@ import {
   createFfmpegNutProcess,
   type FfmpegNutProcess,
 } from './FFmpegPipeline.js';
-import { demuxNutStream } from './Demuxer.js';
+import { demuxNutStream, type DemuxResult } from './Demuxer.js';
 import { VideoStream } from './VideoStream.js';
 import { AudioStream } from './AudioStream.js';
 import type { ClockRef } from './BaseMediaStream.js';
@@ -111,7 +111,7 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
   ) =>
     Effect.tryPromise({
       try: async () => {
-        const { video, audio } = await demuxNutStream(
+        const { video, audio, done } = await demuxNutStream(
           input,
           logger.child('demux')
         );
@@ -141,6 +141,9 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
         video.stream.pipe(videoStream);
 
         await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const settle = () => { if (settled) return false; settled = true; return true; };
+
           const cleanup = () => {
             connection.setSpeaking(false);
             connection.setVideoAttributes(false);
@@ -156,21 +159,30 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
             audio?.stream.destroy();
           };
 
-          const onSourceError = (error: Error) => {
-            cleanup();
-            destroySources();
+          const removeListeners = () => {
             abortSignal?.removeEventListener('abort', onAbort);
             video.stream.off('error', onSourceError);
             audio?.stream.off('error', onSourceError);
-            reject(error);
+          };
+
+          const onSourceError = (error: Error) => {
+            if (!settle()) return;
+            cleanup();
+            destroySources();
+            removeListeners();
+            // Wait for the demuxer loop to fully finish before rejecting
+            // so the next pipeline doesn't start while native handles are open.
+            done.then(() => reject(error), () => reject(error));
           };
 
           const onAbort = () => {
+            if (!settle()) return;
             cleanup();
             destroySources();
-            video.stream.off('error', onSourceError);
-            audio?.stream.off('error', onSourceError);
-            reject(abortSignal?.reason ?? new Error('Aborted'));
+            removeListeners();
+            const reason = abortSignal?.reason ?? new Error('Aborted');
+            // Wait for the demuxer loop to fully finish before rejecting.
+            done.then(() => reject(reason), () => reject(reason));
           };
 
           abortSignal?.addEventListener('abort', onAbort, { once: true });
@@ -178,22 +190,21 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           audio?.stream.once('error', onSourceError);
 
           videoStream.once('finish', () => {
+            if (!settle()) return;
             cleanup();
             // Destroy audio source pipe in case it's still draining.
             audio?.stream.destroy();
-            abortSignal?.removeEventListener('abort', onAbort);
-            video.stream.off('error', onSourceError);
-            audio?.stream.off('error', onSourceError);
-            resolve();
+            removeListeners();
+            // Wait for the demuxer loop to fully finish before resolving.
+            done.then(() => resolve(), () => resolve());
           });
 
           videoStream.once('error', (error) => {
+            if (!settle()) return;
             cleanup();
             destroySources();
-            abortSignal?.removeEventListener('abort', onAbort);
-            video.stream.off('error', onSourceError);
-            audio?.stream.off('error', onSourceError);
-            reject(error);
+            removeListeners();
+            done.then(() => reject(error), () => reject(error));
           });
         });
       },
