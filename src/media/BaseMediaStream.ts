@@ -1,5 +1,6 @@
 import { Writable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { setImmediate as nextTick } from 'node:timers/promises';
 
 type PacketLike = {
   data?: Uint8Array | Buffer;
@@ -127,10 +128,10 @@ export class BaseMediaStream extends Writable {
       if (this.noSleepMode || sleepDuration === 0) {
         callback();
       } else if (this.syncEnabled && this.isAhead()) {
-        await sleep(frameTimeMs);
+        await this.precisionSleep(frameTimeMs);
         callback();
       } else {
-        await sleep(sleepDuration);
+        await this.precisionSleep(sleepDuration);
         callback();
       }
     } catch (error) {
@@ -154,6 +155,35 @@ export class BaseMediaStream extends Writable {
     }
 
     return this.ptsValue - this.syncTarget.pts;
+  }
+
+  /**
+   * High-resolution sleep that compensates for ARM's coarse setTimeout
+   * granularity (~4 ms on Cortex-A57).
+   *
+   * Strategy:
+   * - > 5 ms: use setTimeout for the bulk, then spin for the remainder
+   * - 1–5 ms: yield once with setImmediate, then spin
+   * - < 1 ms: skip entirely (the overhead of any async yield exceeds the wait)
+   */
+  private async precisionSleep(ms: number): Promise<void> {
+    if (ms < 1) return;
+
+    const deadline = performance.now() + ms;
+
+    if (ms > 5) {
+      // Sleep the coarse portion; wake ~2 ms early to spin the rest.
+      await sleep(Math.max(1, Math.floor(ms - 2)));
+    } else {
+      // For short sleeps, a single setImmediate tick (~0.1 ms) avoids
+      // starving the event loop while keeping latency low.
+      await nextTick();
+    }
+
+    // Spin-wait for sub-millisecond precision.
+    while (performance.now() < deadline) {
+      // Intentional busy-wait — the remaining time is < 3 ms.
+    }
   }
 
   private isAhead(): boolean {

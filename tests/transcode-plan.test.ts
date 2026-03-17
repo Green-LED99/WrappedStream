@@ -334,7 +334,9 @@ describe('selectTranscodePlan', () => {
       expect(plan.video.targetFps).toBe(LOW_POWER_TARGET_FPS);
       expect(plan.video.targetBitrateKbps).toBe(LOW_POWER_VIDEO_TARGET_BITRATE_KBPS);
       expect(plan.video.maxBitrateKbps).toBe(LOW_POWER_VIDEO_MAX_BITRATE_KBPS);
-      expect(plan.video.preset).toBe('superfast');
+      // Changed from 'superfast' to 'ultrafast' — ARM Cortex-A57 needs the
+      // fastest preset to maintain real-time encoding at 720p/24fps.
+      expect(plan.video.preset).toBe('ultrafast');
     }
   });
 

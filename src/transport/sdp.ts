@@ -68,6 +68,7 @@ ${candidate}
 a=rtcp-mux
 a=ice-lite
 a=rtpmap:${codecPayloadType.H264.payload_type} H264/90000
+a=fmtp:${codecPayloadType.H264.payload_type} profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1
 a=rtpmap:${codecPayloadType.H264.rtx_payload_type} rtx/90000
 a=fmtp:${codecPayloadType.H264.rtx_payload_type} apt=${codecPayloadType.H264.payload_type}
 a=rtcp-fb:${codecPayloadType.H264.payload_type} ccm fir

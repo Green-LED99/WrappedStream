@@ -111,15 +111,27 @@ async function runYtdlp(
       [
         '--dump-json',
         '--no-playlist',
-        // Prefer H.264 codec to avoid VP9/AV1 software decode overhead.
-        '-S', 'res:720,+codec:h264',
+        // Sort: prefer 720p H.264 video + Opus audio + HTTPS protocol.
+        // Opus audio avoids AAC→Opus transcoding.  HTTPS avoids DASH overhead.
+        '-S', 'res:720,codec:h264,acodec:opus,proto',
+        // Format: force H.264 video (regex matches avc1.* codec names from
+        // YouTube) and prefer Opus audio to avoid transcoding.  Falls back
+        // to any audio, then a combined stream if split is unavailable.
         '-f',
-        'bv*[height<=720]+ba/b',
+        'bv[vcodec~=\'^(avc|h264)\'][height<=720]+ba[acodec=opus]/bv[vcodec~=\'^(avc|h264)\'][height<=720]+ba/best[height<=720]',
         // Skip thumbnails and metadata that we don't use.
         '--no-write-thumbnail',
         '--no-cache-dir',
+        '--no-warnings',
         // Prevent hangs on slow network connections.
-        '--socket-timeout', '15',
+        '--socket-timeout', '30',
+        // Network reliability for ARM devices with variable connectivity.
+        '--retries', '5',
+        '--fragment-retries', '5',
+        '--buffer-size', '16384',
+        // Prefer player clients that reliably serve H.264 DASH streams.
+        // mweb: best H.264 availability; ios: H.264-only; tv_embedded: SABR fallback.
+        '--extractor-args', 'youtube:player_client=mweb,ios,tv_embedded',
         `ytsearch1:${query}`,
       ],
       {

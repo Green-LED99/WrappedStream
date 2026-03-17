@@ -10,7 +10,7 @@ export type VideoEncoderOption = typeof VideoEncoderSchema.Type;
 export const SubtitleBurnInSchema = Schema.Literal('auto', 'never');
 export type SubtitleBurnIn = typeof SubtitleBurnInSchema.Type;
 
-export const PerformanceProfileSchema = Schema.Literal('default', 'low-power');
+export const PerformanceProfileSchema = Schema.Literal('default', 'low-power', 'ultra-low-power');
 export type PerformanceProfile = typeof PerformanceProfileSchema.Type;
 
 export class AppConfig extends Schema.Class<AppConfig>('AppConfig')({

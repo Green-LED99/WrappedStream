@@ -339,7 +339,8 @@ async function runStreamJob(
       streamConnection,
       streamWebRtc,
       logger,
-      abortSignal
+      abortSignal,
+      plan.video.mode === 'transcode' ? plan.video.maxBitrateKbps : undefined
     );
 
     // Wait for FFmpeg to finish or handle its error

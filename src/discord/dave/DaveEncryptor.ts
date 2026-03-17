@@ -8,8 +8,10 @@ export class DaveMediaEncryptor {
   // Reusable output buffer — avoids a Buffer.allocUnsafe() on every frame.
   // At 30 fps video + ~50 fps audio this eliminates ~80 allocations/second
   // and the associated GC pressure on ARM (Jetson Nano).
-  private outputBuffer: Buffer = Buffer.allocUnsafe(0);
-  private outputCapacity = 0;
+  // Pre-allocate 16 KB to cover typical video frames (~8-50 KB) and avoid
+  // the first-frame allocation stall.  Audio frames (~150 B) fit trivially.
+  private outputBuffer: Buffer = Buffer.allocUnsafe(16_384);
+  private outputCapacity = 16_384;
 
   private hasKeyRatchet = false;
 

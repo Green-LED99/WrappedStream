@@ -10,6 +10,8 @@ export type FfprobeStream = {
   sample_rate?: string;
   channels?: number;
   index?: number;
+  has_b_frames?: number;
+  bit_rate?: string;
   tags?: {
     language?: string;
     title?: string;
@@ -142,7 +144,7 @@ export async function probeMedia(
 
     args.push(
       '-show_entries',
-      'stream=index,codec_name,codec_type,profile,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
+      'stream=index,codec_name,codec_type,profile,width,height,avg_frame_rate,sample_rate,channels,has_b_frames,bit_rate:stream_tags=language,title:format=format_name,duration',
       '-show_streams',
       '-show_format',
       '-of',

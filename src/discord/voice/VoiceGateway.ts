@@ -28,6 +28,8 @@ export type VideoAttributes = {
   width: number;
   height: number;
   fps: number;
+  /** Max bitrate in kbps from the transcode plan's performance profile. */
+  maxBitrateKbps?: number;
 };
 
 export const streamsSimulcast = [{ type: 'screen', rid: '100', quality: 100 }] as const;
@@ -275,10 +277,17 @@ export abstract class BaseMediaConnection extends EventEmitter {
           active: true,
           quality: 100,
           rtx_ssrc: rtxSsrc,
-          // 4.5 Mbps — matches the max bitrate from the transcode plan.
-          // Advertising 10 Mbps (the previous value) to Discord is wasteful
-          // when the encoder will never produce more than ~4.5 Mbps.
-          max_bitrate: 4_500 * 1_000,
+          // Match the advertised max_bitrate to the actual encoder output.
+          // Advertising a higher bitrate than the encoder produces wastes
+          // Discord's bandwidth estimation budget.  The value is set by the
+          // caller via VideoAttributes (derived from the transcode plan's
+          // maxBitrateKbps) so it adapts to the active performance profile:
+          //   default       → 4500 kbps
+          //   low-power     → 2500 kbps
+          //   ultra-low-power → 1500 kbps
+          max_bitrate: attributes.maxBitrateKbps
+            ? attributes.maxBitrateKbps * 1_000
+            : 4_500 * 1_000,
           max_framerate: attributes.fps,
           max_resolution: {
             type: 'fixed',

@@ -51,7 +51,8 @@ export class MediaService extends Context.Tag('MediaService')<
       connection: BaseMediaConnection,
       webRtc: WebRtcConnection,
       logger: Logger,
-      abortSignal?: AbortSignal
+      abortSignal?: AbortSignal,
+      maxBitrateKbps?: number
     ) => Effect.Effect<void, MediaError>;
   }
 >() {}
@@ -102,7 +103,8 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
     connection: BaseMediaConnection,
     webRtc: WebRtcConnection,
     logger: Logger,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    maxBitrateKbps?: number
   ) =>
     Effect.tryPromise({
       try: async () => {
@@ -116,6 +118,7 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           width: video.width,
           height: video.height,
           fps: Math.round(video.framerateNum / video.framerateDen),
+          ...(maxBitrateKbps != null ? { maxBitrateKbps } : {}),
         });
 
         const videoStream = new VideoStream(webRtc);

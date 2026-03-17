@@ -51,7 +51,11 @@ export function buildFfmpegNutArgs(
   );
 
   // Minimize input buffering for lower latency on constrained devices.
-  args.push('-fflags', 'nobuffer');
+  // genpts generates missing PTS values for robust timing on HLS/live sources.
+  args.push('-fflags', 'nobuffer+genpts');
+
+  // Global low-delay flags to minimize pipeline latency.
+  args.push('-flags', 'low_delay');
 
   // -extension_picky 0 is only needed for HLS streams that use non-standard
   // segment file extensions (e.g. .txt instead of .ts).  The flag was added
@@ -130,16 +134,23 @@ export function buildFfmpegNutArgs(
         '-tune', 'zerolatency',
       );
       args.push('-threads:v', String(plan.video.threads));
+      // Reduce reference frames to 1 for lower memory and faster encoding.
+      // Combined with -bf 0 this means the encoder holds only 2 frames.
+      args.push('-refs', '1');
+      // Use slice threading for lower single-frame latency on ARM.
+      args.push('-x264-params', 'sliced-threads=1');
     } else if (encoder === 'h264_nvmpi') {
       // Jetson Nano hardware encoder tuning:
-      // - num_capture_buffers: reduce from default 10 to 4 to cut pipeline
-      //   latency (fewer queued frames) while keeping the HW block fed.
-      // - profile baseline: disables B-frames at the encoder level for
-      //   lower latency (complements the -bf 0 flag below).
+      // - num_capture_buffers 6: balanced between pipeline feeding and
+      //   latency (default 10 is too high, 4 risks starvation under load).
+      // - profile baseline: disables B-frames for RTP compatibility.
+      // - level 3.1: matches Discord's profile-level-id=42e01f (Constrained
+      //   Baseline Level 3.1).
       // - rc cbr: constant bitrate avoids look-ahead buffering.
       args.push(
-        '-num_capture_buffers', '4',
+        '-num_capture_buffers', '6',
         '-profile:v', 'baseline',
+        '-level:v', '3.1',
         '-rc', 'cbr',
       );
     } else if (encoder === 'h264_v4l2m2m') {
@@ -171,8 +182,11 @@ export function buildFfmpegNutArgs(
       `${plan.video.targetBitrateKbps}k`,
       '-maxrate:v',
       `${plan.video.maxBitrateKbps}k`,
+      // 1:1 bufsize:target ratio ensures tight CBR for real-time RTP
+      // streaming.  A larger bufsize allows quality spikes that can
+      // overwhelm the receiver's jitter buffer.
       '-bufsize:v',
-      `${plan.video.maxBitrateKbps}k`,
+      `${plan.video.targetBitrateKbps}k`,
       '-bf',
       '0',
       '-g', String(plan.video.targetFps),
@@ -181,7 +195,14 @@ export function buildFfmpegNutArgs(
 
   // ── Audio codec ──────────────────────────────────────────────────────
   if (!plan.audio) {
-    args.push('-flush_packets', '1', '-f', 'nut', 'pipe:1');
+    args.push(
+      '-max_delay', '0',
+      '-flush_packets', '1',
+      '-f', 'nut',
+      '-syncpoints', 'none',
+      '-write_index', '0',
+      'pipe:1',
+    );
     return args;
   }
 
@@ -196,12 +217,33 @@ export function buildFfmpegNutArgs(
       '-ar',
       String(plan.audio.targetSampleRate),
       '-b:a',
-      `${plan.audio.targetBitrateKbps}k`
+      `${plan.audio.targetBitrateKbps}k`,
+      // Opus tuning for real-time media streaming to Discord:
+      // - application audio: full-bandwidth mode optimised for music/general
+      //   audio rather than speech (voip) or low-delay modes.
+      // - vbr off: true CBR for consistent network behaviour and SRTP safety.
+      // - compression_level 5: balanced quality/CPU on ARM Cortex-A57.
+      // - frame_duration 20: explicit 20ms frames matching Discord's playback.
+      '-application', 'audio',
+      '-vbr', 'off',
+      '-compression_level', '5',
+      '-frame_duration', '20',
     );
   }
 
-  // Flush each packet immediately to the pipe — reduces muxing latency.
-  args.push('-flush_packets', '1', '-f', 'nut', 'pipe:1');
+  // NUT muxer settings optimised for non-seekable pipe output:
+  // - flush_packets 1: flush each packet immediately for minimal latency.
+  // - syncpoints none: disables syncpoint overhead (stream is pipe, no seeking).
+  // - write_index 0: disables growing data tables for endless streaming.
+  // - max_delay 0 / muxdelay 0: eliminates muxer buffering.
+  args.push(
+    '-max_delay', '0',
+    '-flush_packets', '1',
+    '-f', 'nut',
+    '-syncpoints', 'none',
+    '-write_index', '0',
+    'pipe:1',
+  );
   return args;
 }
 

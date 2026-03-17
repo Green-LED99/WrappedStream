@@ -1,0 +1,115 @@
+# ── Jetson Nano 8 GB Dockerfile ──────────────────────────────
+#
+# Builds WrappedStream for NVIDIA Jetson Nano (JetPack 4.6 / L4T r32.7.x).
+# Uses the L4T base image to get CUDA, cuDNN, and TensorRT libs that the
+# nvmpi encoder needs at runtime.  FFmpeg is built from source with the
+# jetson-ffmpeg patch so that h264_nvmpi is available.
+#
+# Build:   docker build -f Dockerfile.jetson -t wrapped-stream:jetson .
+# Run:     docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up
+
+# ── Stage 1: Build ──────────────────────────────────────────
+FROM nvcr.io/nvidia/l4t-base:r32.7.1 AS build
+
+# Node.js 22.x for ARM64 (official nodesource)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends \
+        nodejs \
+        cmake \
+        g++ \
+        make \
+        python3 \
+        python3-pip \
+        git \
+        nasm \
+        pkg-config \
+        libx264-dev \
+        libopus-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build jetson-ffmpeg (provides h264_nvmpi / hevc_nvmpi)
+RUN git clone --depth 1 https://github.com/jocover/jetson-ffmpeg.git /tmp/jetson-ffmpeg \
+    && cd /tmp/jetson-ffmpeg \
+    && mkdir build && cd build \
+    && cmake .. && make -j$(nproc) && make install \
+    && ldconfig
+
+# Build FFmpeg with nvmpi + libx264 + libopus
+RUN git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg \
+    && cd /tmp/ffmpeg \
+    && git apply /tmp/jetson-ffmpeg/ffmpeg_patches/ffmpeg7.0_nvmpi.patch \
+    && ./configure \
+        --enable-gpl \
+        --enable-nonfree \
+        --enable-nvmpi \
+        --enable-libx264 \
+        --enable-libopus \
+        --enable-shared \
+        --disable-static \
+        --disable-doc \
+        --disable-debug \
+        --extra-cflags="-mcpu=cortex-a57" \
+    && make -j$(nproc) && make install \
+    && ldconfig \
+    && rm -rf /tmp/ffmpeg /tmp/jetson-ffmpeg
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY src/ src/
+COPY vendor/ vendor/
+COPY tests/ tests/
+COPY vitest.config.ts ./
+
+RUN npx tsc -p tsconfig.json
+
+
+# ── Stage 2: Runtime ────────────────────────────────────────
+FROM nvcr.io/nvidia/l4t-base:r32.7.1 AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends \
+        nodejs \
+        python3 \
+        python3-pip \
+        libx264-155 \
+        libopus0 \
+    && python3 -m pip install --no-cache-dir yt-dlp \
+    && apt-get purge -y python3-pip curl gnupg \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy FFmpeg/ffprobe built with nvmpi from build stage
+COPY --from=build /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=build /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=build /usr/local/lib/lib*.so* /usr/local/lib/
+RUN ldconfig
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY --from=build /app/dist/ dist/
+COPY vendor/ vendor/
+
+ENV LOG_LEVEL=info \
+    FFMPEG_PATH=/usr/local/bin/ffmpeg \
+    FFPROBE_PATH=/usr/local/bin/ffprobe \
+    YTDLP_PATH=yt-dlp \
+    # 3 GB V8 heap — leaves ~5 GB for FFmpeg, WASM, CUDA libs, and the OS.
+    NODE_OPTIONS="--max-old-space-size=3072" \
+    # Default to low-power profile on Jetson.
+    PERFORMANCE_PROFILE=low-power \
+    # Prefer the hardware encoder.
+    ENCODER_PREFERENCE=h264_nvmpi
+
+ENTRYPOINT ["node", "dist/src/index.js"]
+CMD ["play-url"]

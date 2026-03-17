@@ -19,8 +19,15 @@ export const LOW_CPU_AUDIO_CHANNELS = 2;
 // Low-power profile constants (optimised for Jetson Nano / RPi class devices)
 export const LOW_POWER_TARGET_FPS = 24;
 export const LOW_POWER_VIDEO_TARGET_BITRATE_KBPS = 1800;
-export const LOW_POWER_VIDEO_MAX_BITRATE_KBPS = 3500;
+export const LOW_POWER_VIDEO_MAX_BITRATE_KBPS = 2500;
 export const LOW_POWER_AUDIO_BITRATE_KBPS = 96;
+
+// Ultra-low-power profile constants (for thermally throttled / multi-workload Jetson)
+export const ULTRA_LOW_POWER_TARGET_HEIGHT = 480;
+export const ULTRA_LOW_POWER_TARGET_FPS = 20;
+export const ULTRA_LOW_POWER_VIDEO_TARGET_BITRATE_KBPS = 1200;
+export const ULTRA_LOW_POWER_VIDEO_MAX_BITRATE_KBPS = 1500;
+export const ULTRA_LOW_POWER_AUDIO_BITRATE_KBPS = 64;
 
 export type VideoPlan =
   | {
@@ -80,7 +87,7 @@ export type TranscodePlan = {
 export interface TranscodePlanOptions {
   encoder: VideoEncoder;
   subtitleBurnIn: 'auto' | 'never';
-  performanceProfile: 'default' | 'low-power';
+  performanceProfile: 'default' | 'low-power' | 'ultra-low-power';
   language: string;
 }
 
@@ -114,14 +121,25 @@ export function selectTranscodePlan(
   const videoSourceFps = parseFrameRate(videoStream.avg_frame_rate);
 
   const isLowPower = options.performanceProfile === 'low-power';
-  const targetHeight = LOW_CPU_TARGET_HEIGHT;
-  const targetFps = isLowPower ? LOW_POWER_TARGET_FPS : LOW_CPU_TARGET_FPS;
-  const targetBitrate = isLowPower
-    ? LOW_POWER_VIDEO_TARGET_BITRATE_KBPS
-    : LOW_CPU_VIDEO_TARGET_BITRATE_KBPS;
-  const maxBitrate = isLowPower
-    ? LOW_POWER_VIDEO_MAX_BITRATE_KBPS
-    : LOW_CPU_VIDEO_MAX_BITRATE_KBPS;
+  const isUltraLowPower = options.performanceProfile === 'ultra-low-power';
+  const targetHeight = isUltraLowPower
+    ? ULTRA_LOW_POWER_TARGET_HEIGHT
+    : LOW_CPU_TARGET_HEIGHT;
+  const targetFps = isUltraLowPower
+    ? ULTRA_LOW_POWER_TARGET_FPS
+    : isLowPower
+      ? LOW_POWER_TARGET_FPS
+      : LOW_CPU_TARGET_FPS;
+  const targetBitrate = isUltraLowPower
+    ? ULTRA_LOW_POWER_VIDEO_TARGET_BITRATE_KBPS
+    : isLowPower
+      ? LOW_POWER_VIDEO_TARGET_BITRATE_KBPS
+      : LOW_CPU_VIDEO_TARGET_BITRATE_KBPS;
+  const maxBitrate = isUltraLowPower
+    ? ULTRA_LOW_POWER_VIDEO_MAX_BITRATE_KBPS
+    : isLowPower
+      ? LOW_POWER_VIDEO_MAX_BITRATE_KBPS
+      : LOW_CPU_VIDEO_MAX_BITRATE_KBPS;
 
   // Detect subtitles (unless disabled).
   const subIndex =
@@ -133,18 +151,24 @@ export function selectTranscodePlan(
 
   const needsSubtitleBurnIn = subtitle != null;
 
-  // H.264 profiles that guarantee no B-frames.  Main and High profiles CAN
-  // use B-frames, which break RTP packetization (the H264RtpPacketizer does
-  // not handle decode-order reordering).  Only allow copy when the source
-  // profile is known to be B-frame-free.
+  // H.264 profiles that guarantee no B-frames by definition.
   const videoProfile = videoStream.profile?.toLowerCase() ?? '';
-  const isBFrameFreeProfile =
+  const isGuaranteedBFrameFree =
     videoProfile === 'baseline' ||
     videoProfile === 'constrained baseline' ||
     videoProfile === '66'; // ffprobe numeric profile_idc for Baseline
 
-  // Video copy eligibility: source is H.264 Baseline at or below target
-  // resolution and frame rate, with no subtitle burn-in required.
+  // Main and High profiles CAN use B-frames, but many streaming sources
+  // (YouTube, HLS CDNs) use these profiles without B-frames.  The
+  // `has_b_frames` field from ffprobe tells us the actual state.  When
+  // it reports 0, the source is safe for copy-mode RTP packetization.
+  const hasBFrames = videoStream.has_b_frames ?? -1;
+  const isBFrameFreeByProbe = hasBFrames === 0;
+
+  const isBFrameFreeProfile = isGuaranteedBFrameFree || isBFrameFreeByProbe;
+
+  // Video copy eligibility: source is H.264 without B-frames, at or below
+  // target resolution and frame rate, with no subtitle burn-in required.
   const canCopyVideo =
     videoSourceCodec === 'h264' &&
     isBFrameFreeProfile &&
@@ -174,17 +198,20 @@ export function selectTranscodePlan(
 
     const preset =
       options.encoder === 'libx264'
-        ? isLowPower
-          ? 'superfast'
-          : 'fast'
+        ? isUltraLowPower
+          ? 'ultrafast'
+          : isLowPower
+            ? 'ultrafast'
+            : 'fast'
         : undefined;
 
     // When a hardware encoder is handling video, the CPU is free for
     // filter processing (scaling, subtitle burn-in) so we can afford
-    // more filter threads.  Software encoding needs those cores itself.
+    // more filter threads.  Software encoding should use all four
+    // Cortex-A57 cores on Jetson Nano for maximum throughput.
     const isHwEncoder =
       options.encoder === 'h264_nvmpi' || options.encoder === 'h264_v4l2m2m';
-    const threads = isHwEncoder ? 3 : LOW_CPU_VIDEO_THREADS;
+    const threads = isHwEncoder ? 3 : 4;
 
     video = {
       mode: 'transcode',
@@ -203,7 +230,7 @@ export function selectTranscodePlan(
     };
   }
 
-  const audio = audioStream ? selectAudioPlan(audioStream, isLowPower) : undefined;
+  const audio = audioStream ? selectAudioPlan(audioStream, isLowPower, isUltraLowPower) : undefined;
 
   return {
     video,
@@ -263,7 +290,7 @@ export function describeTranscodePlan(plan: TranscodePlan): Record<string, unkno
   };
 }
 
-function selectAudioPlan(stream: FfprobeStream, isLowPower: boolean): AudioPlan {
+function selectAudioPlan(stream: FfprobeStream, isLowPower: boolean, isUltraLowPower: boolean): AudioPlan {
   const sourceCodec = normalizeCodec(stream.codec_name);
   const sampleRate = Number(stream.sample_rate ?? '0');
   const channels = stream.channels ?? 0;
@@ -275,11 +302,12 @@ function selectAudioPlan(stream: FfprobeStream, isLowPower: boolean): AudioPlan 
 
   const indexPart = stream.index != null ? { audioStreamIndex: stream.index } : {};
 
-  // Low-power mode uses 96 kbps Opus (saves ~25% CPU on the audio encoder
-  // while remaining transparent for voice/music at Discord's typical quality).
-  const audioBitrate = isLowPower
-    ? LOW_POWER_AUDIO_BITRATE_KBPS
-    : LOW_CPU_AUDIO_BITRATE_KBPS;
+  // Ultra-low-power uses 64 kbps, low-power uses 96 kbps, default uses 128 kbps.
+  const audioBitrate = isUltraLowPower
+    ? ULTRA_LOW_POWER_AUDIO_BITRATE_KBPS
+    : isLowPower
+      ? LOW_POWER_AUDIO_BITRATE_KBPS
+      : LOW_CPU_AUDIO_BITRATE_KBPS;
 
   return canCopy
     ? {
