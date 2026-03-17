@@ -251,7 +251,7 @@ export function buildFfmpegNutArgs(
   // - flush_packets 1: flush each packet immediately for minimal latency.
   // - syncpoints none: disables syncpoint overhead (stream is pipe, no seeking).
   // - write_index 0: disables growing data tables for endless streaming.
-  // - max_delay 0 / muxdelay 0: eliminates muxer buffering.
+  // - max_delay 0: eliminates muxer buffering.
   args.push(
     '-max_delay', '0',
     '-flush_packets', '1',

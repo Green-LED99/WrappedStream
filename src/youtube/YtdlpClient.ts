@@ -132,7 +132,7 @@ async function runYtdlp(
         // Prefer player clients that reliably serve H.264 DASH streams.
         // mweb: best H.264 availability; ios: H.264-only streams;
         // android_vr: current default client, no PO token required;
-        // web_safari: yt-dlp default fallback (requires Deno JS runtime).
+        // web_safari: yt-dlp default fallback (uses built-in JS interpreter).
         '--extractor-args', 'youtube:player_client=mweb,ios,android_vr,web_safari',
         `ytsearch1:${query}`,
       ],
