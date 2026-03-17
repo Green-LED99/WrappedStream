@@ -25,6 +25,15 @@ export function classifyVoiceCloseCode(code: number): CloseClassification {
     return 'resume';
   }
 
+  // Transient errors that can be recovered by resuming:
+  // 4001: Unknown opcode — could happen from a corrupted frame
+  // 4002: Failed to decode payload — transient parse error
+  // 4003: Not authenticated — race condition during reconnect
+  // 4005: Already authenticated — race condition
+  if (code === 4001 || code === 4002 || code === 4003 || code === 4005) {
+    return 'resume';
+  }
+
   // 4006: Session no longer valid — need fresh connection
   // 4009: Session timeout — need fresh connection
   if (code === 4006 || code === 4009) {
@@ -32,16 +41,12 @@ export function classifyVoiceCloseCode(code: number): CloseClassification {
   }
 
   // Explicitly fatal codes include:
-  // 4001: Unknown opcode
-  // 4002: Failed to decode payload
-  // 4003: Not authenticated
-  // 4004: Authentication failed
-  // 4005: Already authenticated
+  // 4004: Authentication failed (invalid token)
   // 4007: Invalid seq
   // 4011: Server not found
   // 4012: Unknown protocol
   // 4014: Disconnected
   // 4016: Unknown encryption mode
-  // 4021: Channel was deleted
+  // 4021: Rate limited
   return 'fatal';
 }

@@ -175,11 +175,9 @@ export class WebRtcConnection {
       codecPayloadType.opus.payload_type,
       codecPayloadType.opus.clockRate
     );
-    // Playout delay min=0, max=0 means render immediately with no jitter
-    // buffer smoothing — lowest possible latency for real-time streaming.
-    audioRtpConfig.playoutDelayId = 5;
-    audioRtpConfig.playoutDelayMin = 0;
-    audioRtpConfig.playoutDelayMax = 0;
+    // Playout delay is a video-only RTP header extension — not advertised
+    // in the audio SDP section, so we omit it here to avoid sending an
+    // extension the remote side does not expect.
     this.audioPacketizer = new rtc.RtpPacketizer(audioRtpConfig);
     this.audioPacketizer.addToChain(new rtc.RtcpSrReporter(audioRtpConfig));
     this.audioPacketizer.addToChain(new rtc.RtcpNackResponder());

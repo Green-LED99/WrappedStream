@@ -14,6 +14,7 @@ import {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  MessageFlags,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -69,7 +70,7 @@ export class CommandServer {
         });
         if (!interaction.replied && !interaction.deferred) {
           await interaction
-            .reply({ content: 'An error occurred.', ephemeral: true })
+            .reply({ content: 'An error occurred.', flags: MessageFlags.Ephemeral })
             .catch(() => {});
         }
       }
@@ -136,13 +137,13 @@ export class CommandServer {
     const guildId = interaction.guildId;
     const channelId = interaction.channelId;
     if (!guildId || !channelId) {
-      await interaction.reply({ content: 'Could not determine guild or channel.', ephemeral: true });
+      await interaction.reply({ content: 'Could not determine guild or channel.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const session = this.state.getSession(guildId, channelId);
     if (!session) {
-      await interaction.reply({ content: 'No active stream in this channel.', ephemeral: true });
+      await interaction.reply({ content: 'No active stream in this channel.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -163,7 +164,7 @@ export class CommandServer {
         await this.handleNextEpisode(interaction, guildId, channelId);
         break;
       default:
-        await interaction.reply({ content: 'Unknown command.', ephemeral: true });
+        await interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
     }
   }
 
@@ -204,7 +205,7 @@ export class CommandServer {
 
     const ok = this.state.requestRestart(guildId, channelId, target);
     if (!ok) {
-      await interaction.reply({ content: 'No active stream to skip.', ephemeral: true });
+      await interaction.reply({ content: 'No active stream to skip.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -227,14 +228,14 @@ export class CommandServer {
       const maxStr = duration > 0 ? ` (max: ${PlaybackStateManager.formatTime(duration)})` : '';
       await interaction.reply({
         content: `Invalid time. Use MM:SS or HH:MM:SS${maxStr}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     const ok = this.state.requestRestart(guildId, channelId, parsed);
     if (!ok) {
-      await interaction.reply({ content: 'No active stream to seek.', ephemeral: true });
+      await interaction.reply({ content: 'No active stream to seek.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -250,7 +251,7 @@ export class CommandServer {
   ): Promise<void> {
     const session = this.state.getSession(guildId, channelId);
     if (!session) {
-      await interaction.reply({ content: 'No active stream.', ephemeral: true });
+      await interaction.reply({ content: 'No active stream.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -259,7 +260,7 @@ export class CommandServer {
     const target = session.duration > 0 ? session.duration : 999_999;
     const ok = this.state.requestRestart(guildId, channelId, target);
     if (!ok) {
-      await interaction.reply({ content: 'No active stream to skip.', ephemeral: true });
+      await interaction.reply({ content: 'No active stream to skip.', flags: MessageFlags.Ephemeral });
       return;
     }
 

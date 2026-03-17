@@ -143,6 +143,9 @@ export function buildFfmpegNutArgs(
       args.push(
         '-preset', plan.video.preset ?? 'fast',
         '-tune', 'zerolatency',
+        // Match Discord's profile-level-id=42e01f (Constrained Baseline Level 3.1).
+        '-profile:v', 'baseline',
+        '-level:v', '3.1',
       );
       args.push('-threads:v', String(plan.video.threads));
       // Reduce reference frames to 1 for lower memory and faster encoding.
@@ -165,9 +168,8 @@ export function buildFfmpegNutArgs(
         '-rc', 'cbr',
       );
     } else if (encoder === 'h264_v4l2m2m') {
-      // Raspberry Pi / V4L2 hardware encoder — limit output buffers to
-      // reduce memory usage while keeping the pipeline fed.
-      args.push('-num_output_buffers', '16');
+      // Raspberry Pi / V4L2 hardware encoder — default settings are
+      // sufficient (num_output_buffers defaults to 16).
     }
 
     // All encoders (SW and HW) need pixel format
@@ -201,6 +203,8 @@ export function buildFfmpegNutArgs(
       '-bf',
       '0',
       '-g', String(plan.video.targetFps),
+      // Disable scene-change keyframes for predictable GOP structure in RTP.
+      '-sc_threshold', '0',
     );
   }
 
@@ -209,6 +213,7 @@ export function buildFfmpegNutArgs(
     args.push(
       '-max_delay', '0',
       '-flush_packets', '1',
+      '-f_strict', 'experimental',
       '-f', 'nut',
       '-syncpoints', 'none',
       '-write_index', '0',
@@ -250,6 +255,7 @@ export function buildFfmpegNutArgs(
   args.push(
     '-max_delay', '0',
     '-flush_packets', '1',
+    '-f_strict', 'experimental',
     '-f', 'nut',
     '-syncpoints', 'none',
     '-write_index', '0',

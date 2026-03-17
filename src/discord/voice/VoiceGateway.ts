@@ -234,7 +234,7 @@ export abstract class BaseMediaConnection extends EventEmitter {
     if (!this.currentWebRtcParameters) return;
     this.sendOpcode(VoiceOpcode.Speaking, {
       delay: 0,
-      speaking: speaking ? 1 : 0,
+      speaking: speaking ? 2 : 0, // 2 = SOUNDSHARE (screen share audio, no speaking indicator)
       ssrc: this.audioSsrc,
     });
   }

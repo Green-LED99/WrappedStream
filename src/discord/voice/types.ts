@@ -47,7 +47,8 @@ export type VoiceSelectProtocolAck = {
 };
 
 export type VoiceSpeaking = {
-  speaking: 0 | 1 | 2;
+  /** Bitmask: 1=VOICE, 2=SOUNDSHARE, 4=PRIORITY */
+  speaking: number;
   delay: number;
   ssrc: number;
 };
