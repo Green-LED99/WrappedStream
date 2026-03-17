@@ -68,6 +68,54 @@ describe('matchEvent', () => {
     const result = matchEvent(sampleEvents, 'chiefs 49ers');
     expect(result?.title).toBe('Kansas City Chiefs San Francisco 49ers');
   });
+
+  it('does not match single-character tokens via substring', () => {
+    // A single-character sport tag like "a" from "group-a" should not
+    // cause false positive substring matches with short queries.
+    const events: SportsurgeEvent[] = [
+      {
+        url: 'https://sportsurge.ws/watch/group-a/south-sudan-mali/111',
+        title: 'South Sudan Mali',
+        sport: 'fiba-world-cup-qualification-women-group-a',
+      },
+    ];
+    const result = matchEvent(events, 'avs');
+    expect(result).toBeUndefined();
+  });
+
+  it('matches via team alias (avs → avalanche/colorado)', () => {
+    const events: SportsurgeEvent[] = [
+      {
+        url: 'https://sportsurge.ws/watch/nhl/pittsburgh-penguins-colorado-avalanche/222',
+        title: 'Pittsburgh Penguins Colorado Avalanche',
+        sport: 'nhl',
+      },
+    ];
+    const result = matchEvent(events, 'avs');
+    expect(result?.title).toBe('Pittsburgh Penguins Colorado Avalanche');
+  });
+
+  it('matches via sport alias (ucl → uefa champions league)', () => {
+    const events: SportsurgeEvent[] = [
+      {
+        url: 'https://sportsurge.ws/watch/uefa-champions-league/real-madrid-city/333',
+        title: 'Real Madrid Manchester City',
+        sport: 'uefa-champions-league-knockout-stage',
+      },
+    ];
+    const result = matchEvent(events, 'ucl');
+    expect(result?.title).toBe('Real Madrid Manchester City');
+  });
+
+  it('matches via nickname alias (niners → 49ers)', () => {
+    const result = matchEvent(sampleEvents, 'niners');
+    expect(result?.title).toBe('Kansas City Chiefs San Francisco 49ers');
+  });
+
+  it('matches via city alias (dubs → warriors golden state)', () => {
+    const result = matchEvent(sampleEvents, 'dubs');
+    expect(result?.title).toBe('Golden State Warriors New York Knicks');
+  });
 });
 
 describe('buildFfmpegNutArgs', () => {
@@ -152,6 +200,37 @@ describe('buildFfmpegNutArgs', () => {
       undefined,
       {}
     );
+    expect(args).not.toContain('-headers');
+  });
+
+  it('extracts User-Agent into -user_agent flag', () => {
+    const args = buildFfmpegNutArgs(
+      'http://example.com/stream.m3u8',
+      basePlan,
+      undefined,
+      { 'User-Agent': 'TestAgent/1.0', Referer: 'https://example.com/' }
+    );
+
+    const uaIdx = args.indexOf('-user_agent');
+    expect(uaIdx).toBeGreaterThan(-1);
+    expect(args[uaIdx + 1]).toBe('TestAgent/1.0');
+
+    // User-Agent should NOT appear in -headers
+    const headersIdx = args.indexOf('-headers');
+    expect(headersIdx).toBeGreaterThan(-1);
+    expect(args[headersIdx + 1]).not.toContain('User-Agent');
+    expect(args[headersIdx + 1]).toContain('Referer');
+  });
+
+  it('omits -headers when only User-Agent is provided', () => {
+    const args = buildFfmpegNutArgs(
+      'http://example.com/stream.m3u8',
+      basePlan,
+      undefined,
+      { 'User-Agent': 'TestAgent/1.0' }
+    );
+
+    expect(args).toContain('-user_agent');
     expect(args).not.toContain('-headers');
   });
 });
