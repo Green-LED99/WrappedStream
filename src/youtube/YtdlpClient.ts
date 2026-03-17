@@ -131,8 +131,9 @@ async function runYtdlp(
         '--buffer-size', '16384',
         // Prefer player clients that reliably serve H.264 DASH streams.
         // mweb: best H.264 availability; ios: H.264-only streams;
-        // android_vr: current default client, no PO token required.
-        '--extractor-args', 'youtube:player_client=mweb,ios,android_vr',
+        // android_vr: current default client, no PO token required;
+        // web_safari: yt-dlp default fallback (requires Deno JS runtime).
+        '--extractor-args', 'youtube:player_client=mweb,ios,android_vr,web_safari',
         `ytsearch1:${query}`,
       ],
       {
@@ -148,9 +149,16 @@ async function runYtdlp(
       stderr.push(Buffer.from(chunk));
     });
 
-    child.once('exit', (code) => {
-      if (code === 0 || code === null) {
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
         resolve();
+        return;
+      }
+
+      if (code === null) {
+        reject(
+          new Error(`yt-dlp killed by signal ${signal ?? 'unknown'} (possibly timed out)`)
+        );
         return;
       }
 
