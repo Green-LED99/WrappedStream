@@ -560,6 +560,10 @@ async function runStreamJob(opts: StreamJobOptions): Promise<void> {
             }
           }
         } finally {
+          // Tear down Discord video/speaking state once ALL playback is done
+          // (not between seek/skip restarts — that would kill the stream).
+          streamConnection.setSpeaking(false);
+          streamConnection.setVideoAttributes(false);
           if (restartEmitter) {
             restartEmitter.off('restart', onRestart);
           }

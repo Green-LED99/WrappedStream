@@ -145,9 +145,12 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           const settle = () => { if (settled) return false; settled = true; return true; };
 
           const cleanup = () => {
-            connection.setSpeaking(false);
-            connection.setVideoAttributes(false);
             // Destroy writable streams to stop frame processing.
+            // NOTE: We intentionally do NOT call connection.setSpeaking(false)
+            // or connection.setVideoAttributes(false) here — that would tear
+            // down the Discord video context, preventing seek/skip restarts
+            // from re-establishing the stream.  The caller (stream loop in
+            // index.ts) is responsible for connection state teardown.
             videoStream.destroy();
             audioStream?.destroy();
           };
