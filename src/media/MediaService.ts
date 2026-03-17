@@ -44,7 +44,9 @@ export class MediaService extends Context.Tag('MediaService')<
       plan: TranscodePlan,
       audioUrl?: string,
       httpHeaders?: Record<string, string>,
-      ffmpegMajorVersion?: number
+      ffmpegMajorVersion?: number,
+      seekSeconds?: number,
+      audioStreamIndex?: number
     ) => Effect.Effect<FfmpegNutProcess, MediaError>;
     readonly playStream: (
       input: NodeJS.ReadableStream,
@@ -89,9 +91,9 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
         }),
     }),
 
-  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string, httpHeaders?: Record<string, string>, ffmpegMajorVersion?: number) =>
+  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string, httpHeaders?: Record<string, string>, ffmpegMajorVersion?: number, seekSeconds?: number, audioStreamIndex?: number) =>
     Effect.try({
-      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl, httpHeaders, ffmpegMajorVersion),
+      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl, httpHeaders, ffmpegMajorVersion, seekSeconds, audioStreamIndex),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),

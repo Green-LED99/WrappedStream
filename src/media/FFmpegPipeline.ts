@@ -6,7 +6,7 @@ export type FfmpegNutProcess = {
   output: NodeJS.ReadableStream;
   wait: Promise<void>;
   startedAt: number;
-  stop(): void;
+  stop(): Promise<void>;
 };
 
 /**
@@ -38,7 +38,9 @@ export function buildFfmpegNutArgs(
   plan: TranscodePlan,
   audioUrl?: string,
   httpHeaders?: Record<string, string>,
-  ffmpegMajorVersion?: number
+  ffmpegMajorVersion?: number,
+  seekSeconds?: number,
+  audioStreamIndex?: number
 ): string[] {
   const args = ['-v', 'warning'];
 
@@ -71,6 +73,13 @@ export function buildFfmpegNutArgs(
       .map(([k, v]) => `${k}: ${v}\r\n`)
       .join('');
     args.push('-headers', headerStr);
+  }
+
+  // Fast seek: place -ss before -i so FFmpeg seeks by keyframe in the
+  // demuxer rather than decoding from the start.  This is critical for
+  // large files and network streams.
+  if (seekSeconds != null && seekSeconds > 0) {
+    args.push('-ss', String(seekSeconds));
   }
 
   // Reconnect flags are only useful for direct HTTP streams (mp4, mkv).
@@ -110,10 +119,12 @@ export function buildFfmpegNutArgs(
     // If we have a separate audio input, map from input 1; otherwise from input 0.
     // When the audio plan specifies a stream index (language-selected), use the
     // absolute stream index so FFmpeg picks the correct track.
+    // The CLI --audio-stream option overrides the plan's stream index.
+    const effectiveAudioIdx = audioStreamIndex ?? plan.audio.audioStreamIndex;
     if (audioUrl) {
-      args.push('-map', '1:a:0');
-    } else if (plan.audio.audioStreamIndex != null) {
-      args.push('-map', `0:${plan.audio.audioStreamIndex}?`);
+      args.push('-map', `1:a:${audioStreamIndex ?? 0}`);
+    } else if (effectiveAudioIdx != null) {
+      args.push('-map', `0:${effectiveAudioIdx}?`);
     } else {
       args.push('-map', '0:a:0?');
     }
@@ -253,9 +264,11 @@ export function createFfmpegNutProcess(
   plan: TranscodePlan,
   audioUrl?: string,
   httpHeaders?: Record<string, string>,
-  ffmpegMajorVersion?: number
+  ffmpegMajorVersion?: number,
+  seekSeconds?: number,
+  audioStreamIndex?: number
 ): FfmpegNutProcess {
-  const args = buildFfmpegNutArgs(url, plan, audioUrl, httpHeaders, ffmpegMajorVersion);
+  const args = buildFfmpegNutArgs(url, plan, audioUrl, httpHeaders, ffmpegMajorVersion, seekSeconds, audioStreamIndex);
   const startedAt = performance.now();
   const child = spawn(ffmpegPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -289,8 +302,18 @@ export function createFfmpegNutProcess(
     output: child.stdout,
     wait,
     startedAt,
-    stop(): void {
-      child.kill('SIGTERM');
+    async stop(): Promise<void> {
+      if (child.killed || child.exitCode !== null) return;
+      return new Promise<void>((resolve) => {
+        const forceKill = setTimeout(() => {
+          if (!child.killed) child.kill('SIGKILL');
+        }, 2_000);
+        child.once('exit', () => {
+          clearTimeout(forceKill);
+          resolve();
+        });
+        child.kill('SIGTERM');
+      });
     },
   };
 }

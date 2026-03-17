@@ -11,6 +11,8 @@ import { resolveSearchQuery } from './stremio/StremioResolver.js';
 import { resolveYouTubeQuery } from './youtube/YouTubeResolver.js';
 import { resolveLiveQuery } from './live/LiveResolver.js';
 import { createLogger } from './utils/logger.js';
+import { PlaybackStateManager } from './discord/PlaybackState.js';
+import { CommandServer } from './discord/CommandServer.js';
 
 const program = new Command()
   .name('discord-stream')
@@ -24,15 +26,59 @@ program
   .requiredOption('--guild-id <id>', 'Discord guild (server) ID')
   .requiredOption('--channel-id <id>', 'Discord voice channel ID')
   .requiredOption('--url <url>', 'Direct video URL (mp4/mkv)')
+  .option('--seek <seconds>', 'Seek to this position in seconds', (v) => parseInt(v, 10), 0)
+  .option('--audio-stream <index>', 'Audio stream index (0-based)', (v) => parseInt(v, 10))
   .option('--json', 'Output structured JSON logs', false)
   .action(async (options: {
     guildId: string;
     channelId: string;
     url: string;
+    seek: number;
+    audioStream?: number;
     json: boolean;
   }) => {
     await withSignalHandler((signal) =>
-      runStreamJob(options.guildId, options.channelId, options.url, signal)
+      runStreamJob({
+        guildId: options.guildId,
+        channelId: options.channelId,
+        videoUrl: options.url,
+        abortSignal: signal,
+        seekSeconds: options.seek,
+        audioStreamIndex: options.audioStream,
+      })
+    );
+  });
+
+// ─── play-url-with-commands ──────────────────────────────────────────
+program
+  .command('play-url-with-commands')
+  .description('Stream a video URL with Discord slash command controls (/skip-forward, /skip-backward, /seek, /playtime)')
+  .requiredOption('--guild-id <id>', 'Discord guild (server) ID')
+  .requiredOption('--channel-id <id>', 'Discord voice channel ID')
+  .requiredOption('--url <url>', 'Direct video URL (mp4/mkv)')
+  .requiredOption('--bot-token <token>', 'Discord bot token for slash commands')
+  .option('--seek <seconds>', 'Seek to this position in seconds', (v) => parseInt(v, 10), 0)
+  .option('--audio-stream <index>', 'Audio stream index (0-based)', (v) => parseInt(v, 10))
+  .option('--json', 'Output structured JSON logs', false)
+  .action(async (options: {
+    guildId: string;
+    channelId: string;
+    url: string;
+    botToken: string;
+    seek: number;
+    audioStream?: number;
+    json: boolean;
+  }) => {
+    await withSignalHandler((signal) =>
+      runStreamJobWithCommands({
+        guildId: options.guildId,
+        channelId: options.channelId,
+        videoUrl: options.url,
+        botToken: options.botToken,
+        abortSignal: signal,
+        seekSeconds: options.seek,
+        audioStreamIndex: options.audioStream,
+      })
     );
   });
 
@@ -98,12 +144,12 @@ program
       });
 
       // Feed the resolved URL into the standard streaming pipeline.
-      await runStreamJob(
-        options.guildId,
-        options.channelId,
-        resolved.streamUrl,
-        signal
-      );
+      await runStreamJob({
+        guildId: options.guildId,
+        channelId: options.channelId,
+        videoUrl: resolved.streamUrl,
+        abortSignal: signal,
+      });
     });
   });
 
@@ -145,13 +191,13 @@ program
       // Feed the resolved URL into the standard streaming pipeline.
       // YouTube often returns separate video+audio streams — pass audioUrl
       // so FFmpeg can merge them.
-      await runStreamJob(
-        options.guildId,
-        options.channelId,
-        resolved.streamUrl,
-        signal,
-        resolved.audioUrl
-      );
+      await runStreamJob({
+        guildId: options.guildId,
+        channelId: options.channelId,
+        videoUrl: resolved.streamUrl,
+        abortSignal: signal,
+        audioUrl: resolved.audioUrl,
+      });
     });
   });
 
@@ -186,14 +232,13 @@ program
         streamUrl: resolved.streamUrl.slice(0, 80) + '...',
       });
 
-      await runStreamJob(
-        options.guildId,
-        options.channelId,
-        resolved.streamUrl,
-        signal,
-        undefined,
-        resolved.headers
-      );
+      await runStreamJob({
+        guildId: options.guildId,
+        channelId: options.channelId,
+        videoUrl: resolved.streamUrl,
+        abortSignal: signal,
+        httpHeaders: resolved.headers,
+      });
     });
   });
 
@@ -223,14 +268,24 @@ async function withSignalHandler(
   }
 }
 
-async function runStreamJob(
-  guildId: string,
-  channelId: string,
-  videoUrl: string,
-  abortSignal: AbortSignal,
-  audioUrl?: string,
-  httpHeaders?: Record<string, string>
-): Promise<void> {
+// ─── Stream job options ──────────────────────────────────────────────
+
+interface StreamJobOptions {
+  guildId: string;
+  channelId: string;
+  videoUrl: string;
+  abortSignal: AbortSignal;
+  audioUrl?: string | undefined;
+  httpHeaders?: Record<string, string> | undefined;
+  seekSeconds?: number | undefined;
+  audioStreamIndex?: number | undefined;
+  /** When set, the stream loop will listen for restart events. */
+  playbackState?: PlaybackStateManager | undefined;
+}
+
+// ─── Core stream job ─────────────────────────────────────────────────
+
+async function runStreamJob(opts: StreamJobOptions): Promise<void> {
   const mainEffect = Effect.gen(function* () {
     const config = yield* ConfigService;
     const daveService = yield* DaveService;
@@ -240,9 +295,11 @@ async function runStreamJob(
 
     const logger = createLogger(config.logLevel);
     logger.info('Starting Discord video stream', {
-      guildId,
-      channelId,
-      videoUrl,
+      guildId: opts.guildId,
+      channelId: opts.channelId,
+      videoUrl: opts.videoUrl,
+      seekSeconds: opts.seekSeconds,
+      audioStreamIndex: opts.audioStreamIndex,
     });
 
     // 1. Load DAVE module
@@ -270,8 +327,8 @@ async function runStreamJob(
     });
 
     // 5. Probe media
-    logger.info('Probing media source', { url: videoUrl });
-    const probeResult = yield* media.probe(config.ffprobePath, videoUrl, httpHeaders, encoderInfo.ffmpegMajorVersion);
+    logger.info('Probing media source', { url: opts.videoUrl });
+    const probeResult = yield* media.probe(config.ffprobePath, opts.videoUrl, opts.httpHeaders, encoderInfo.ffmpegMajorVersion);
 
     // 6. Select transcode plan
     const plan = yield* media.selectPlan(probeResult, {
@@ -284,7 +341,7 @@ async function runStreamJob(
     // When a separate audioUrl is provided (e.g. YouTube split streams),
     // the video URL has no audio track so ffprobe reports none.  Inject
     // a default transcode audio plan so FFmpeg maps the second input.
-    if (audioUrl && !plan.audio) {
+    if (opts.audioUrl && !plan.audio) {
       (plan as { audio?: unknown }).audio = {
         mode: 'transcode' as const,
         sourceCodec: 'aac',
@@ -300,22 +357,11 @@ async function runStreamJob(
     logger.info('Transcode plan selected', describeTranscodePlan(plan));
 
     // 7. Join voice channel
-    logger.info('Joining voice channel', { guildId, channelId });
-    yield* streamerService.joinVoice(streamer, guildId, channelId);
+    logger.info('Joining voice channel', { guildId: opts.guildId, channelId: opts.channelId });
+    yield* streamerService.joinVoice(streamer, opts.guildId, opts.channelId);
     logger.info('Voice channel joined');
 
-    // 8. Spawn FFmpeg
-    logger.info('Starting FFmpeg pipeline');
-    const pipeline = yield* media.createPipeline(
-      config.ffmpegPath,
-      videoUrl,
-      plan,
-      audioUrl,
-      httpHeaders,
-      encoderInfo.ffmpegMajorVersion
-    );
-
-    // 9. Create Go Live stream and play
+    // 8. Create Go Live stream
     logger.info('Creating Go Live stream');
     const streamWebRtc = yield* streamerService.createStream(streamer);
 
@@ -333,38 +379,126 @@ async function runStreamJob(
       });
     }
 
-    logger.info('Streaming video');
-    yield* media.playStream(
-      pipeline.output,
-      streamConnection,
-      streamWebRtc,
-      logger,
-      abortSignal,
-      plan.video.mode === 'transcode' ? plan.video.maxBitrateKbps : undefined
-    );
+    // ── Playback state tracking ────────────────────────────────────
+    const pbState = opts.playbackState;
+    const duration = probeResult.format?.duration
+      ? parseFloat(probeResult.format.duration)
+      : 0;
 
-    // Wait for FFmpeg to finish or handle its error
+    if (pbState) {
+      pbState.startSession(
+        opts.guildId, opts.channelId, opts.videoUrl,
+        duration, opts.seekSeconds ?? 0,
+      );
+    }
+
+    // ── Stream loop (supports seek/skip restarts) ──────────────────
+    let currentSeek = opts.seekSeconds ?? 0;
+
     yield* Effect.tryPromise({
-      try: () =>
-        Promise.race([
-          pipeline.wait,
-          new Promise<void>((_, reject) => {
-            if (abortSignal.aborted) {
-              reject(abortSignal.reason);
-              return;
+      try: async () => {
+        // If we have a playback state, set up the restart listener
+        const restartEmitter = pbState
+          ? pbState.getSession(opts.guildId, opts.channelId)?.restartEmitter
+          : undefined;
+
+        let nextSeek: number | null = null;
+        let streamAbort: AbortController | null = null;
+
+        const onRestart = (newSeek: number) => {
+          logger.info('Restart requested', { currentSeek, newSeek });
+          nextSeek = newSeek;
+          if (streamAbort) streamAbort.abort(new Error('Seek restart'));
+        };
+
+        if (restartEmitter) {
+          restartEmitter.on('restart', onRestart);
+        }
+
+        try {
+          let keepPlaying = true;
+          while (keepPlaying) {
+            streamAbort = new AbortController();
+
+            // Abort the stream loop when the global signal fires
+            const onGlobalAbort = () => streamAbort?.abort(opts.abortSignal.reason);
+            opts.abortSignal.addEventListener('abort', onGlobalAbort, { once: true });
+
+            logger.info('Starting FFmpeg pipeline', { seekSeconds: currentSeek });
+
+            const pipeline = await Effect.runPromise(
+              media.createPipeline(
+                config.ffmpegPath,
+                opts.videoUrl,
+                plan,
+                opts.audioUrl,
+                opts.httpHeaders,
+                encoderInfo.ffmpegMajorVersion,
+                currentSeek > 0 ? currentSeek : undefined,
+                opts.audioStreamIndex,
+              )
+            );
+
+            try {
+              // Update playback state with new seek position
+              if (pbState) {
+                pbState.startSession(
+                  opts.guildId, opts.channelId, opts.videoUrl,
+                  duration, currentSeek,
+                );
+              }
+
+              logger.info('Streaming video', { seekSeconds: currentSeek });
+
+              await Effect.runPromise(
+                media.playStream(
+                  pipeline.output,
+                  streamConnection,
+                  streamWebRtc,
+                  logger,
+                  streamAbort.signal,
+                  plan.video.mode === 'transcode' ? plan.video.maxBitrateKbps : undefined,
+                )
+              );
+
+              // Stream ended naturally
+              logger.info('Stream completed naturally');
+              keepPlaying = false;
+            } catch (streamErr) {
+              if (nextSeek !== null) {
+                // Seek/skip was requested — restart at new position
+                logger.info('Restarting stream at new position', { seekSeconds: nextSeek });
+                currentSeek = nextSeek;
+                nextSeek = null;
+                // Stop old FFmpeg process before creating new one
+                await pipeline.stop();
+                // Brief pause to let streams drain
+                await new Promise((r) => setTimeout(r, 500));
+                // Loop continues → new pipeline at currentSeek
+              } else if (opts.abortSignal.aborted) {
+                logger.info('Global shutdown signal received');
+                await pipeline.stop();
+                keepPlaying = false;
+              } else {
+                // Unexpected error
+                await pipeline.stop();
+                throw streamErr;
+              }
+            } finally {
+              opts.abortSignal.removeEventListener('abort', onGlobalAbort);
             }
-            abortSignal.addEventListener('abort', () => reject(abortSignal.reason), {
-              once: true,
-            });
-          }),
-        ]),
+          }
+        } finally {
+          if (restartEmitter) {
+            restartEmitter.off('restart', onRestart);
+          }
+        }
+      },
       catch: (e) => new Error(e instanceof Error ? e.message : String(e)),
     });
 
-    logger.info('Stream completed successfully');
-
     // Cleanup
-    pipeline.stop();
+    if (pbState) pbState.endSession(opts.guildId, opts.channelId);
     yield* streamerService.leaveVoice(streamer);
     yield* streamerService.destroy(streamer);
     yield* gateway.destroy;
@@ -372,9 +506,9 @@ async function runStreamJob(
 
   const configLayer = ConfigServiceLive({
     token: process.env['DISCORD_TOKEN'] ?? '',
-    guildId,
-    channelId,
-    videoUrl,
+    guildId: opts.guildId,
+    channelId: opts.channelId,
+    videoUrl: opts.videoUrl,
     logLevel: (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info',
     ffmpegPath: process.env['FFMPEG_PATH'] ?? 'ffmpeg',
     ffprobePath: process.env['FFPROBE_PATH'] ?? 'ffprobe',
@@ -402,4 +536,32 @@ async function runStreamJob(
   await Effect.runPromise(
     pipe(mainEffect, Effect.provide(appLayer))
   );
+}
+
+// ─── Stream job with slash command controls ──────────────────────────
+
+async function runStreamJobWithCommands(
+  opts: StreamJobOptions & { botToken: string }
+): Promise<void> {
+  const logLevel =
+    (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') ?? 'info';
+  const logger = createLogger(logLevel);
+
+  const playbackState = new PlaybackStateManager();
+
+  const commandServer = new CommandServer({
+    botToken: opts.botToken,
+    guildId: opts.guildId,
+    logger,
+    playbackState,
+  });
+
+  try {
+    await commandServer.start();
+    logger.info('Slash command server started — /skip-forward, /skip-backward, /seek, /playtime available');
+
+    await runStreamJob({ ...opts, playbackState });
+  } finally {
+    await commandServer.stop();
+  }
 }
