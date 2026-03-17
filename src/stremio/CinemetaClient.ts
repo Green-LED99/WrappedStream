@@ -11,7 +11,9 @@ import { Effect } from 'effect';
 import { StremioError } from '../errors/index.js';
 import type {
   CinemetaMeta,
+  CinemetaMetaDetail,
   CinemetaSearchResult,
+  CinemetaVideo,
   ContentType,
 } from './types.js';
 
@@ -50,6 +52,69 @@ export function searchCinemeta(
 
     return [...movies, ...series];
   });
+}
+
+/**
+ * Fetch full series metadata including all episodes.
+ *
+ * Endpoint: https://v3-cinemeta.strem.io/meta/series/{imdbId}.json
+ */
+export function fetchSeriesMeta(
+  imdbId: string
+): Effect.Effect<CinemetaMetaDetail, StremioError> {
+  const url = `${CINEMETA_BASE}/meta/series/${imdbId}.json`;
+
+  return Effect.tryPromise({
+    try: async () => {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Cinemeta returned HTTP ${response.status} for series meta ${imdbId}.`
+        );
+      }
+
+      return (await response.json()) as CinemetaMetaDetail;
+    },
+    catch: (error) =>
+      new StremioError({
+        message: `Cinemeta series meta fetch failed: ${error instanceof Error ? error.message : String(error)}`,
+        details: { imdbId, url },
+      }),
+  });
+}
+
+/**
+ * Find the next episode after the given season/episode.
+ *
+ * Looks for S:E+1 first, then S+1:E1 if at the end of a season.
+ * Returns null if no more episodes exist.
+ */
+export function getNextEpisode(
+  videos: CinemetaVideo[],
+  currentSeason: number,
+  currentEpisode: number
+): { season: number; episode: number } | null {
+  // Try next episode in same season.
+  const nextInSeason = videos.find(
+    (v) => v.season === currentSeason && v.episode === currentEpisode + 1
+  );
+  if (nextInSeason) {
+    return { season: nextInSeason.season, episode: nextInSeason.episode };
+  }
+
+  // Try first episode of next season.
+  const nextSeasonEps = videos
+    .filter((v) => v.season === currentSeason + 1)
+    .sort((a, b) => a.episode - b.episode);
+  if (nextSeasonEps.length > 0) {
+    return { season: nextSeasonEps[0]!.season, episode: nextSeasonEps[0]!.episode };
+  }
+
+  return null;
 }
 
 /**

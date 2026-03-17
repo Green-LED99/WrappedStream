@@ -1,9 +1,12 @@
 import type { WebRtcConnection } from '../transport/WebRtcConnection.js';
-import { BaseMediaStream } from './BaseMediaStream.js';
+import { BaseMediaStream, type ClockRef } from './BaseMediaStream.js';
 
 export class AudioStream extends BaseMediaStream {
-  public constructor(private readonly connection: WebRtcConnection) {
-    super('audio');
+  public constructor(
+    private readonly connection: WebRtcConnection,
+    clockRef?: ClockRef,
+  ) {
+    super('audio', false, clockRef);
   }
 
   protected override async sendFrame(

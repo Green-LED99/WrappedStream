@@ -130,8 +130,9 @@ async function runYtdlp(
         '--fragment-retries', '5',
         '--buffer-size', '16384',
         // Prefer player clients that reliably serve H.264 DASH streams.
-        // mweb: best H.264 availability; ios: H.264-only; tv_embedded: SABR fallback.
-        '--extractor-args', 'youtube:player_client=mweb,ios,tv_embedded',
+        // mweb: best H.264 availability; ios: H.264-only streams;
+        // android_vr: current default client, no PO token required.
+        '--extractor-args', 'youtube:player_client=mweb,ios,android_vr',
         `ytsearch1:${query}`,
       ],
       {

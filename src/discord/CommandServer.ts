@@ -112,6 +112,9 @@ export class CommandServer {
       new SlashCommandBuilder()
         .setName('playtime')
         .setDescription('Show current playback position and duration'),
+      new SlashCommandBuilder()
+        .setName('next-episode')
+        .setDescription('Skip to the next episode (series auto-play)'),
     ];
 
     const rest = new REST({ version: '10' }).setToken(this.botToken);
@@ -155,6 +158,9 @@ export class CommandServer {
         break;
       case 'seek':
         await this.handleSeek(interaction, guildId, channelId, session.duration);
+        break;
+      case 'next-episode':
+        await this.handleNextEpisode(interaction, guildId, channelId);
         break;
       default:
         await interaction.reply({ content: 'Unknown command.', ephemeral: true });
@@ -235,5 +241,28 @@ export class CommandServer {
     await interaction.reply(
       `Seeking to **${PlaybackStateManager.formatTime(parsed)}** / **${PlaybackStateManager.formatTime(duration)}**`,
     );
+  }
+
+  private async handleNextEpisode(
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+    channelId: string,
+  ): Promise<void> {
+    const session = this.state.getSession(guildId, channelId);
+    if (!session) {
+      await interaction.reply({ content: 'No active stream.', ephemeral: true });
+      return;
+    }
+
+    // Seek to beyond the duration to trigger natural stream end,
+    // which the auto-play loop in play-search will pick up.
+    const target = session.duration > 0 ? session.duration : 999_999;
+    const ok = this.state.requestRestart(guildId, channelId, target);
+    if (!ok) {
+      await interaction.reply({ content: 'No active stream to skip.', ephemeral: true });
+      return;
+    }
+
+    await interaction.reply('Skipping to next episode...');
   }
 }

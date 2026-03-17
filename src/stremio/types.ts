@@ -63,4 +63,30 @@ export type ResolvedStream = {
   streamUrl: string;
   filename?: string | undefined;
   quality?: string | undefined;
+  /** Series episode context for auto-play-next. */
+  season?: number | undefined;
+  episode?: number | undefined;
+  addonBase?: string | undefined;
+};
+
+// ---------------------------------------------------------------------------
+// Cinemeta meta detail (for series episode listing)
+// ---------------------------------------------------------------------------
+
+export type CinemetaMetaDetail = {
+  meta: {
+    id: string;
+    imdb_id: string;
+    type: ContentType;
+    name: string;
+    videos?: CinemetaVideo[];
+  };
+};
+
+export type CinemetaVideo = {
+  id: string;
+  season: number;
+  episode: number;
+  name?: string;
+  released?: string;
 };

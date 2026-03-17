@@ -8,6 +8,8 @@ import { StreamerService, StreamerServiceLive } from './discord/streamer/Streame
 import { MediaService, MediaServiceLive } from './media/MediaService.js';
 import { describeTranscodePlan } from './media/TranscodePlan.js';
 import { resolveSearchQuery } from './stremio/StremioResolver.js';
+import { fetchSeriesMeta, getNextEpisode } from './stremio/CinemetaClient.js';
+import { resolveContent } from './stremio/TorrentioClient.js';
 import { resolveYouTubeQuery } from './youtube/YouTubeResolver.js';
 import { resolveLiveQuery } from './live/LiveResolver.js';
 import { createLogger } from './utils/logger.js';
@@ -94,6 +96,7 @@ program
   .option('--type <type>', 'Content type: movie or series')
   .option('--season <number>', 'Season number (required for series)', parseInt)
   .option('--episode <number>', 'Episode number (required for series)', parseInt)
+  .option('--no-auto-play', 'Disable auto-play next episode for series')
   .option('--json', 'Output structured JSON logs', false)
   .action(async (options: {
     guildId: string;
@@ -102,6 +105,7 @@ program
     type?: string;
     season?: number;
     episode?: number;
+    autoPlay: boolean;
     json: boolean;
   }) => {
     await withSignalHandler(async (signal) => {
@@ -127,7 +131,7 @@ program
       }
 
       // Resolve the search query to a direct stream URL.
-      const resolved = await Effect.runPromise(
+      let resolved = await Effect.runPromise(
         resolveSearchQuery(addonUrl, {
           query: options.query,
           type: contentType,
@@ -136,20 +140,77 @@ program
         }, logger)
       );
 
-      logger.info('Resolved content for streaming', {
-        name: resolved.contentName,
-        imdbId: resolved.imdbId,
-        quality: resolved.quality,
-        filename: resolved.filename,
-      });
+      // ── Episode auto-play loop ───────────────────────────────────
+      // For series content, automatically advance to the next episode
+      // when the current one finishes.  Disable with --no-auto-play.
+      let currentSeason = resolved.season;
+      let currentEpisode = resolved.episode;
 
-      // Feed the resolved URL into the standard streaming pipeline.
-      await runStreamJob({
-        guildId: options.guildId,
-        channelId: options.channelId,
-        videoUrl: resolved.streamUrl,
-        abortSignal: signal,
-      });
+      while (!signal.aborted) {
+        logger.info('Resolved content for streaming', {
+          name: resolved.contentName,
+          imdbId: resolved.imdbId,
+          quality: resolved.quality,
+          filename: resolved.filename,
+          ...(currentSeason != null ? { season: currentSeason, episode: currentEpisode } : {}),
+        });
+
+        await runStreamJob({
+          guildId: options.guildId,
+          channelId: options.channelId,
+          videoUrl: resolved.streamUrl,
+          abortSignal: signal,
+        });
+
+        // Check if we should auto-play the next episode.
+        if (signal.aborted) break;
+        if (!options.autoPlay) break;
+        if (resolved.contentType !== 'series') break;
+        if (currentSeason == null || currentEpisode == null) break;
+        if (!resolved.addonBase) break;
+
+        // Fetch series metadata and find the next episode.
+        logger.info('Looking up next episode', {
+          currentSeason,
+          currentEpisode,
+        });
+
+        const meta = await Effect.runPromise(
+          fetchSeriesMeta(resolved.imdbId)
+        );
+        const next = getNextEpisode(
+          meta.meta.videos ?? [],
+          currentSeason,
+          currentEpisode
+        );
+
+        if (!next) {
+          logger.info('No more episodes — series complete');
+          break;
+        }
+
+        logger.info('Auto-playing next episode', {
+          season: next.season,
+          episode: next.episode,
+        });
+
+        currentSeason = next.season;
+        currentEpisode = next.episode;
+
+        // Resolve the next episode's stream URL.
+        resolved = await Effect.runPromise(
+          resolveContent(
+            resolved.addonBase,
+            'series',
+            resolved.imdbId,
+            resolved.contentName,
+            next.season,
+            next.episode
+          )
+        );
+        resolved.season = next.season;
+        resolved.episode = next.episode;
+      }
     });
   });
 
@@ -470,21 +531,19 @@ async function runStreamJob(opts: StreamJobOptions): Promise<void> {
                 logger.info('Restarting stream at new position', { seekSeconds: nextSeek });
                 currentSeek = nextSeek;
                 nextSeek = null;
-                // Stop old FFmpeg process before creating new one
-                await pipeline.stop();
                 // Brief pause to let streams drain
                 await new Promise((r) => setTimeout(r, 500));
                 // Loop continues → new pipeline at currentSeek
               } else if (opts.abortSignal.aborted) {
                 logger.info('Global shutdown signal received');
-                await pipeline.stop();
                 keepPlaying = false;
               } else {
                 // Unexpected error
-                await pipeline.stop();
                 throw streamErr;
               }
             } finally {
+              // Always ensure FFmpeg is killed — stop() is idempotent.
+              await pipeline.stop();
               opts.abortSignal.removeEventListener('abort', onGlobalAbort);
             }
           }

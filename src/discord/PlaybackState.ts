@@ -9,6 +9,14 @@
 
 import { EventEmitter } from 'node:events';
 
+export interface SeriesContext {
+  imdbId: string;
+  contentName: string;
+  season: number;
+  episode: number;
+  addonBase: string;
+}
+
 export interface PlaybackSession {
   guildId: string;
   channelId: string;
@@ -21,6 +29,8 @@ export interface PlaybackSession {
   seekSeconds: number;
   /** Emits `'restart'` with the new seek position in seconds. */
   restartEmitter: EventEmitter;
+  /** Series context for auto-play-next. */
+  seriesContext?: SeriesContext;
 }
 
 export class PlaybackStateManager {

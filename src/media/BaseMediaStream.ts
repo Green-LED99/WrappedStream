@@ -22,6 +22,8 @@ export interface PipelineStats {
 
 const STATS_INTERVAL = 300;
 
+export type ClockRef = { wallClock?: number };
+
 export class BaseMediaStream extends Writable {
   private ptsValue?: number;
   private readonly syncTolerance = 20;
@@ -40,7 +42,8 @@ export class BaseMediaStream extends Writable {
 
   public constructor(
     private readonly type: 'video' | 'audio',
-    noSleep = false
+    noSleep = false,
+    private readonly clockRef?: ClockRef,
   ) {
     super({ objectMode: true, highWaterMark: 0 });
     this.noSleepMode = noSleep;
@@ -104,7 +107,14 @@ export class BaseMediaStream extends Writable {
         1000;
       this.emit('pts', this.ptsValue);
 
-      this.startTime ??= endSend;
+      if (this.startTime === undefined) {
+        if (this.clockRef) {
+          this.clockRef.wallClock ??= endSend;
+          this.startTime = this.clockRef.wallClock;
+        } else {
+          this.startTime = endSend;
+        }
+      }
       this.startPts ??= this.ptsValue;
 
       const targetElapsedMs = this.ptsValue - this.startPts + frameTimeMs;
@@ -125,10 +135,19 @@ export class BaseMediaStream extends Writable {
         this.emit('stats', this.stats);
       }
 
+      const delta = this.ptsDelta();
+      const isAheadOfSync =
+        this.syncEnabled &&
+        this.syncTarget?.writableEnded === false &&
+        delta !== undefined &&
+        delta > this.syncTolerance;
+
       if (this.noSleepMode || sleepDuration === 0) {
         callback();
-      } else if (this.syncEnabled && this.isAhead()) {
-        await this.precisionSleep(frameTimeMs);
+      } else if (isAheadOfSync) {
+        // Add the drift delta on top of the normal PTS-based sleep so the
+        // sync target can catch up gradually instead of over-correcting.
+        await this.precisionSleep(sleepDuration + delta!);
         callback();
       } else {
         await this.precisionSleep(sleepDuration);
@@ -186,12 +205,4 @@ export class BaseMediaStream extends Writable {
     }
   }
 
-  private isAhead(): boolean {
-    const delta = this.ptsDelta();
-    return (
-      this.syncTarget?.writableEnded === false &&
-      delta !== undefined &&
-      delta > this.syncTolerance
-    );
-  }
 }

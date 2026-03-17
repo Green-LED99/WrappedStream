@@ -97,6 +97,13 @@ export function resolveSearchQuery(
       url: resolved.streamUrl.slice(0, 80) + '...',
     });
 
+    // Attach series context for auto-play-next.
+    if (contentType === 'series' && search.season != null && search.episode != null) {
+      resolved.season = search.season;
+      resolved.episode = search.episode;
+      resolved.addonBase = addonBase;
+    }
+
     return resolved;
   });
 }

@@ -16,6 +16,7 @@ import {
 import { demuxNutStream } from './Demuxer.js';
 import { VideoStream } from './VideoStream.js';
 import { AudioStream } from './AudioStream.js';
+import type { ClockRef } from './BaseMediaStream.js';
 import {
   detectEncoder,
   type EncoderCapabilities,
@@ -123,8 +124,9 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           ...(maxBitrateKbps != null ? { maxBitrateKbps } : {}),
         });
 
-        const videoStream = new VideoStream(webRtc);
-        const audioStream = audio ? new AudioStream(webRtc) : undefined;
+        const clockRef: ClockRef = {};
+        const videoStream = new VideoStream(webRtc, clockRef);
+        const audioStream = audio ? new AudioStream(webRtc, clockRef) : undefined;
 
         if (audio && audioStream) {
           videoStream.syncStream = audioStream;
@@ -142,10 +144,21 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           const cleanup = () => {
             connection.setSpeaking(false);
             connection.setVideoAttributes(false);
+            // Destroy writable streams to stop frame processing.
+            videoStream.destroy();
+            audioStream?.destroy();
+          };
+
+          const destroySources = () => {
+            // Destroy demuxer PassThrough pipes so the demuxer's background
+            // packet loop unblocks and cleans up native handles.
+            video.stream.destroy();
+            audio?.stream.destroy();
           };
 
           const onSourceError = (error: Error) => {
             cleanup();
+            destroySources();
             abortSignal?.removeEventListener('abort', onAbort);
             video.stream.off('error', onSourceError);
             audio?.stream.off('error', onSourceError);
@@ -154,6 +167,7 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
 
           const onAbort = () => {
             cleanup();
+            destroySources();
             video.stream.off('error', onSourceError);
             audio?.stream.off('error', onSourceError);
             reject(abortSignal?.reason ?? new Error('Aborted'));
@@ -165,6 +179,8 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
 
           videoStream.once('finish', () => {
             cleanup();
+            // Destroy audio source pipe in case it's still draining.
+            audio?.stream.destroy();
             abortSignal?.removeEventListener('abort', onAbort);
             video.stream.off('error', onSourceError);
             audio?.stream.off('error', onSourceError);
@@ -173,6 +189,7 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
 
           videoStream.once('error', (error) => {
             cleanup();
+            destroySources();
             abortSignal?.removeEventListener('abort', onAbort);
             video.stream.off('error', onSourceError);
             audio?.stream.off('error', onSourceError);
