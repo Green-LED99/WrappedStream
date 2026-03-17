@@ -1,0 +1,33 @@
+# Jetson Nano override — layer on top of docker-compose.yml:
+#
+#   docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up
+#
+# Exposes the NVIDIA video codec and GPU devices required by h264_nvmpi,
+# caps resources to leave headroom for the OS and CUDA runtime, and sets
+# Jetson-optimised environment defaults.
+
+services:
+  discord-stream:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    runtime: nvidia
+    environment:
+      - PERFORMANCE_PROFILE=low-power
+      - ENCODER_PREFERENCE=h264_nvmpi
+      - NODE_OPTIONS=--max-old-space-size=3072
+    devices:
+      # Required for h264_nvmpi hardware encoder on Jetson Nano:
+      - /dev/nvhost-ctrl
+      - /dev/nvhost-ctrl-gpu
+      - /dev/nvhost-prof-gpu
+      - /dev/nvhost-msenc
+      - /dev/nvmap
+      - /dev/nvhost-gpu
+      - /dev/nvhost-as-gpu
+    deploy:
+      resources:
+        limits:
+          # 6 GB memory cap — leaves ~2 GB for the OS + CUDA libs.
+          memory: 6G
+          cpus: "4.0"

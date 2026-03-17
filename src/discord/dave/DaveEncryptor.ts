@@ -5,6 +5,14 @@ export class DaveMediaEncryptor {
   private framePointer = 0;
   private frameCapacity = 0;
 
+  // Reusable output buffer — avoids a Buffer.allocUnsafe() on every frame.
+  // At 30 fps video + ~50 fps audio this eliminates ~80 allocations/second
+  // and the associated GC pressure on ARM (Jetson Nano).
+  // Pre-allocate 16 KB to cover typical video frames (~8-50 KB) and avoid
+  // the first-frame allocation stall.  Audio frames (~150 B) fit trivially.
+  private outputBuffer: Buffer = Buffer.allocUnsafe(16_384);
+  private outputCapacity = 16_384;
+
   private hasKeyRatchet = false;
 
   public constructor(private readonly dave: DaveModule) {
@@ -67,10 +75,23 @@ export class DaveMediaEncryptor {
       return Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
     }
 
+    // Grow the reusable output buffer only when needed (grow-only strategy
+    // mirrors ensureFrameCapacity).  We copy into a slice of the pooled
+    // buffer and return that slice — no per-frame allocation.
+    if (bytesWritten > this.outputCapacity) {
+      this.outputBuffer = Buffer.allocUnsafe(bytesWritten);
+      this.outputCapacity = bytesWritten;
+    }
+
     const outputHeap = this.dave.HEAPU8;
-    const output = Buffer.allocUnsafe(bytesWritten);
-    output.set(outputHeap.subarray(framePointer, framePointer + bytesWritten));
-    return output;
+    this.outputBuffer.set(
+      outputHeap.subarray(framePointer, framePointer + bytesWritten)
+    );
+
+    // Return a view of the exact bytes written.  Since the downstream
+    // consumer (sendMessageBinary) copies into the RTP packetizer before
+    // this method is called again, reusing the underlying buffer is safe.
+    return this.outputBuffer.subarray(0, bytesWritten) as Buffer;
   }
 
   private ensureFrameCapacity(requiredCapacity: number): number {

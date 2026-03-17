@@ -129,4 +129,29 @@ describe('AppConfig schema validation', () => {
     const result = await Effect.runPromise(decode(raw));
     expect(result.ytdlpPath).toBe('/usr/local/bin/yt-dlp');
   });
+
+  it('applies default language', async () => {
+    const raw = {
+      token: 'tok',
+      guildId: 'g',
+      channelId: 'c',
+      videoUrl: 'https://example.com/v.mp4',
+    };
+
+    const result = await Effect.runPromise(decode(raw));
+    expect(result.language).toBe('eng');
+  });
+
+  it('accepts explicit language', async () => {
+    const raw = {
+      token: 'tok',
+      guildId: 'g',
+      channelId: 'c',
+      videoUrl: 'https://example.com/v.mp4',
+      language: 'jpn',
+    };
+
+    const result = await Effect.runPromise(decode(raw));
+    expect(result.language).toBe('jpn');
+  });
 });

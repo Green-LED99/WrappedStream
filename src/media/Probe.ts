@@ -3,12 +3,15 @@ import { spawn } from 'node:child_process';
 export type FfprobeStream = {
   codec_name?: string;
   codec_type?: string;
+  profile?: string;
   width?: number;
   height?: number;
   avg_frame_rate?: string;
   sample_rate?: string;
   channels?: number;
   index?: number;
+  has_b_frames?: number;
+  bit_rate?: string;
   tags?: {
     language?: string;
     title?: string;
@@ -34,14 +37,33 @@ const TEXT_SUBTITLE_CODECS = new Set([
   'text',
 ]);
 
+/** Common ISO 639-2/B ↔ ISO 639-1 mappings for cross-format matching. */
+const ISO_639_MAP: Record<string, string> = {
+  eng: 'en', fre: 'fr', fra: 'fr', spa: 'es', ger: 'de', deu: 'de',
+  ita: 'it', por: 'pt', rus: 'ru', jpn: 'ja', kor: 'ko', zho: 'zh',
+  chi: 'zh', ara: 'ar', hin: 'hi', tur: 'tr', pol: 'pl', nld: 'nl',
+  dut: 'nl', swe: 'sv', nor: 'no', dan: 'da', fin: 'fi',
+};
+
+/** Matches a stream's language tag against a target language code. */
+function matchesLanguage(streamLang: string, targetLang: string): boolean {
+  const s = streamLang.toLowerCase();
+  const t = targetLang.toLowerCase();
+  if (s === t) return true;
+  if (ISO_639_MAP[t] === s) return true;
+  if (ISO_639_MAP[s] === t) return true;
+  return false;
+}
+
 /**
- * Find the index (among subtitle streams only) of the first English
- * text subtitle stream, if one exists.
+ * Find the index (among subtitle streams only) of the first text
+ * subtitle stream matching the given language.
  *
- * Returns `undefined` if no English text subtitle is found.
+ * Returns `undefined` if no matching text subtitle is found.
  */
-export function findEnglishSubtitleIndex(
-  streams: FfprobeStream[]
+export function findSubtitleIndex(
+  streams: FfprobeStream[],
+  language: string
 ): number | undefined {
   const subtitleStreams = streams.filter(
     (s) => s.codec_type === 'subtitle'
@@ -52,7 +74,7 @@ export function findEnglishSubtitleIndex(
     const codec = sub.codec_name?.toLowerCase() ?? '';
     const lang = sub.tags?.language?.toLowerCase() ?? '';
 
-    if (TEXT_SUBTITLE_CODECS.has(codec) && (lang === 'eng' || lang === 'en')) {
+    if (TEXT_SUBTITLE_CODECS.has(codec) && matchesLanguage(lang, language)) {
       return i;
     }
   }
@@ -60,10 +82,37 @@ export function findEnglishSubtitleIndex(
   return undefined;
 }
 
+/**
+ * Find the first English text subtitle stream index.
+ * @deprecated Use `findSubtitleIndex(streams, language)` instead.
+ */
+export function findEnglishSubtitleIndex(
+  streams: FfprobeStream[]
+): number | undefined {
+  return findSubtitleIndex(streams, 'eng');
+}
+
+/**
+ * Find the first audio stream matching the given language.
+ * Returns `undefined` if no matching audio stream is found.
+ */
+export function findAudioStreamByLanguage(
+  streams: FfprobeStream[],
+  language: string
+): FfprobeStream | undefined {
+  return streams.find(
+    (s) =>
+      s.codec_type === 'audio' &&
+      s.tags?.language != null &&
+      matchesLanguage(s.tags.language, language)
+  );
+}
+
 export async function probeMedia(
   ffprobePath: string,
   url: string,
-  httpHeaders?: Record<string, string>
+  httpHeaders?: Record<string, string>,
+  ffmpegMajorVersion?: number
 ): Promise<FfprobeResult> {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
@@ -71,11 +120,18 @@ export async function probeMedia(
   await new Promise<void>((resolve, reject) => {
     const args = ['-v', 'error'];
 
+    // Reduce probe analysis window for faster startup on slow ARM CPUs.
+    args.push(
+      '-analyzeduration', '2000000',  // 2 seconds
+      '-probesize', '1048576',        // 1 MB
+    );
+
     // -extension_picky 0 is only needed for HLS streams with non-standard
     // segment extensions (.txt).  Added in FFmpeg 7.0 — older versions
-    // (e.g. Debian Bookworm's FFmpeg 5.x) do not recognise it.
+    // (e.g. Debian Bookworm's FFmpeg 5.x) do not recognise it and will
+    // exit with "Failed to set value '0' for option 'extension_picky'".
     const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
-    if (isHls) {
+    if (isHls && (ffmpegMajorVersion ?? 0) >= 7) {
       args.push('-extension_picky', '0');
     }
 
@@ -88,7 +144,7 @@ export async function probeMedia(
 
     args.push(
       '-show_entries',
-      'stream=index,codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels:stream_tags=language,title:format=format_name,duration',
+      'stream=index,codec_name,codec_type,profile,width,height,avg_frame_rate,sample_rate,channels,has_b_frames,bit_rate:stream_tags=language,title:format=format_name,duration',
       '-show_streams',
       '-show_format',
       '-of',

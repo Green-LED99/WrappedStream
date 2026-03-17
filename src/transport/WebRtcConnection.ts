@@ -175,9 +175,11 @@ export class WebRtcConnection {
       codecPayloadType.opus.payload_type,
       codecPayloadType.opus.clockRate
     );
+    // Playout delay min=0, max=0 means render immediately with no jitter
+    // buffer smoothing — lowest possible latency for real-time streaming.
     audioRtpConfig.playoutDelayId = 5;
     audioRtpConfig.playoutDelayMin = 0;
-    audioRtpConfig.playoutDelayMax = 1;
+    audioRtpConfig.playoutDelayMax = 0;
     this.audioPacketizer = new rtc.RtpPacketizer(audioRtpConfig);
     this.audioPacketizer.addToChain(new rtc.RtcpSrReporter(audioRtpConfig));
     this.audioPacketizer.addToChain(new rtc.RtcpNackResponder());
@@ -189,9 +191,11 @@ export class WebRtcConnection {
       codecPayloadType.H264.payload_type,
       codecPayloadType.H264.clockRate
     );
+    // Playout delay min=0, max=0 for lowest latency — the receiver renders
+    // frames immediately without jitter buffer delay.
     videoRtpConfig.playoutDelayId = 5;
     videoRtpConfig.playoutDelayMin = 0;
-    videoRtpConfig.playoutDelayMax = 10;
+    videoRtpConfig.playoutDelayMax = 0;
 
     this.videoPacketizer = new rtc.H264RtpPacketizer('StartSequence', videoRtpConfig);
     this.videoPacketizer.addToChain(new rtc.RtcpSrReporter(videoRtpConfig));

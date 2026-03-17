@@ -1,5 +1,6 @@
 import { Writable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { setImmediate as nextTick } from 'node:timers/promises';
 
 type PacketLike = {
   data?: Uint8Array | Buffer;
@@ -12,6 +13,15 @@ type PacketLike = {
   free?: () => void;
 };
 
+export interface PipelineStats {
+  framesProcessed: number;
+  lateFrames: number;
+  maxLatenessMs: number;
+  maxSendMs: number;
+}
+
+const STATS_INTERVAL = 300;
+
 export class BaseMediaStream extends Writable {
   private ptsValue?: number;
   private readonly syncTolerance = 20;
@@ -20,6 +30,13 @@ export class BaseMediaStream extends Writable {
   private startPts?: number;
   private syncEnabled = true;
   private syncTarget: BaseMediaStream | undefined;
+
+  private statsData: PipelineStats = {
+    framesProcessed: 0,
+    lateFrames: 0,
+    maxLatenessMs: 0,
+    maxSendMs: 0,
+  };
 
   public constructor(
     private readonly type: 'video' | 'audio',
@@ -45,6 +62,10 @@ export class BaseMediaStream extends Writable {
     return this.ptsValue;
   }
 
+  public get stats(): Readonly<PipelineStats> {
+    return { ...this.statsData };
+  }
+
   protected async sendFrame(_frame: Uint8Array, _frameTimeMs: number): Promise<void> {
     throw new Error(`${this.type} sendFrame must be implemented by a subclass.`);
   }
@@ -65,8 +86,17 @@ export class BaseMediaStream extends Writable {
         (Number(packet.duration || 0n) / packet.timeBase.den) *
         packet.timeBase.num *
         1000;
+
+      const sendStart = performance.now();
       await this.sendFrame(packet.data, frameTimeMs);
       const endSend = performance.now();
+      const sendDuration = endSend - sendStart;
+
+      // Update stats
+      this.statsData.framesProcessed += 1;
+      if (sendDuration > this.statsData.maxSendMs) {
+        this.statsData.maxSendMs = sendDuration;
+      }
 
       this.ptsValue =
         (Number(packet.pts || 0n) / packet.timeBase.den) *
@@ -81,13 +111,27 @@ export class BaseMediaStream extends Writable {
       const actualElapsedMs = endSend - this.startTime;
       const sleepDuration = Math.max(0, targetElapsedMs - actualElapsedMs);
 
+      // Track late frames
+      if (sleepDuration === 0 && actualElapsedMs > targetElapsedMs) {
+        const lateness = actualElapsedMs - targetElapsedMs;
+        this.statsData.lateFrames += 1;
+        if (lateness > this.statsData.maxLatenessMs) {
+          this.statsData.maxLatenessMs = lateness;
+        }
+      }
+
+      // Emit stats periodically
+      if (this.statsData.framesProcessed % STATS_INTERVAL === 0) {
+        this.emit('stats', this.stats);
+      }
+
       if (this.noSleepMode || sleepDuration === 0) {
         callback();
       } else if (this.syncEnabled && this.isAhead()) {
-        await sleep(frameTimeMs);
+        await this.precisionSleep(frameTimeMs);
         callback();
       } else {
-        await sleep(sleepDuration);
+        await this.precisionSleep(sleepDuration);
         callback();
       }
     } catch (error) {
@@ -111,6 +155,35 @@ export class BaseMediaStream extends Writable {
     }
 
     return this.ptsValue - this.syncTarget.pts;
+  }
+
+  /**
+   * High-resolution sleep that compensates for ARM's coarse setTimeout
+   * granularity (~4 ms on Cortex-A57).
+   *
+   * Strategy:
+   * - > 5 ms: use setTimeout for the bulk, then spin for the remainder
+   * - 1–5 ms: yield once with setImmediate, then spin
+   * - < 1 ms: skip entirely (the overhead of any async yield exceeds the wait)
+   */
+  private async precisionSleep(ms: number): Promise<void> {
+    if (ms < 1) return;
+
+    const deadline = performance.now() + ms;
+
+    if (ms > 5) {
+      // Sleep the coarse portion; wake ~2 ms early to spin the rest.
+      await sleep(Math.max(1, Math.floor(ms - 2)));
+    } else {
+      // For short sleeps, a single setImmediate tick (~0.1 ms) avoids
+      // starving the event loop while keeping latency low.
+      await nextTick();
+    }
+
+    // Spin-wait for sub-millisecond precision.
+    while (performance.now() < deadline) {
+      // Intentional busy-wait — the remaining time is < 3 ms.
+    }
   }
 
   private isAhead(): boolean {

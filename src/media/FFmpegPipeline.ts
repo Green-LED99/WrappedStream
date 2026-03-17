@@ -37,16 +37,32 @@ export function buildFfmpegNutArgs(
   url: string,
   plan: TranscodePlan,
   audioUrl?: string,
-  httpHeaders?: Record<string, string>
+  httpHeaders?: Record<string, string>,
+  ffmpegMajorVersion?: number
 ): string[] {
   const args = ['-v', 'warning'];
+
+  // ── Input analysis tuning ──────────────────────────────────────────
+  // Reduce FFmpeg's initial analysis window to speed up stream startup.
+  // Default is 5s / 5MB which is excessive for a known-good stream.
+  args.push(
+    '-analyzeduration', '2000000',  // 2 seconds (in microseconds)
+    '-probesize', '1048576',        // 1 MB
+  );
+
+  // Minimize input buffering for lower latency on constrained devices.
+  // genpts generates missing PTS values for robust timing on HLS/live sources.
+  args.push('-fflags', 'nobuffer+genpts');
+
+  // Global low-delay flags to minimize pipeline latency.
+  args.push('-flags', 'low_delay');
 
   // -extension_picky 0 is only needed for HLS streams that use non-standard
   // segment file extensions (e.g. .txt instead of .ts).  The flag was added
   // in FFmpeg 7.0 and does not exist in older versions (Debian Bookworm
-  // ships FFmpeg 5.x), so we only include it for HLS/playlist URLs.
+  // ships FFmpeg 5.x).  Only include it when we know FFmpeg >= 7.
   const isHls = /\.m3u8?(\?|$)/i.test(url) || /\/playlist\b/i.test(url);
-  if (isHls) {
+  if (isHls && (ffmpegMajorVersion ?? 0) >= 7) {
     args.push('-extension_picky', '0');
   }
 
@@ -92,54 +108,101 @@ export function buildFfmpegNutArgs(
 
   if (plan.audio) {
     // If we have a separate audio input, map from input 1; otherwise from input 0.
-    args.push('-map', audioUrl ? '1:a:0' : '0:a:0?');
+    // When the audio plan specifies a stream index (language-selected), use the
+    // absolute stream index so FFmpeg picks the correct track.
+    if (audioUrl) {
+      args.push('-map', '1:a:0');
+    } else if (plan.audio.audioStreamIndex != null) {
+      args.push('-map', `0:${plan.audio.audioStreamIndex}?`);
+    } else {
+      args.push('-map', '0:a:0?');
+    }
   } else {
     args.push('-an');
   }
 
-  args.push(
-    '-threads:v',
-    String(plan.video.threads),
-    '-c:v',
-    'libx264',
-    '-preset',
-    'fast',
-    '-tune',
-    'zerolatency',
-    '-pix_fmt',
-    'yuv420p'
-  );
+  // ── Video codec ──────────────────────────────────────────────────────
+  if (plan.video.mode === 'copy') {
+    args.push('-c:v', 'copy');
+  } else {
+    const { encoder } = plan.video;
+    args.push('-c:v', encoder);
 
-  // Build the video filter chain.
-  // Order: scale first (work on smaller frames), then burn subtitles.
-  const filters = [...plan.video.filters];
+    if (encoder === 'libx264') {
+      args.push(
+        '-preset', plan.video.preset ?? 'fast',
+        '-tune', 'zerolatency',
+      );
+      args.push('-threads:v', String(plan.video.threads));
+      // Reduce reference frames to 1 for lower memory and faster encoding.
+      // Combined with -bf 0 this means the encoder holds only 2 frames.
+      args.push('-refs', '1');
+      // Use slice threading for lower single-frame latency on ARM.
+      args.push('-x264-params', 'sliced-threads=1');
+    } else if (encoder === 'h264_nvmpi') {
+      // Jetson Nano hardware encoder tuning:
+      // - num_capture_buffers 6: balanced between pipeline feeding and
+      //   latency (default 10 is too high, 4 risks starvation under load).
+      // - profile baseline: disables B-frames for RTP compatibility.
+      // - level 3.1: matches Discord's profile-level-id=42e01f (Constrained
+      //   Baseline Level 3.1).
+      // - rc cbr: constant bitrate avoids look-ahead buffering.
+      args.push(
+        '-num_capture_buffers', '6',
+        '-profile:v', 'baseline',
+        '-level:v', '3.1',
+        '-rc', 'cbr',
+      );
+    } else if (encoder === 'h264_v4l2m2m') {
+      // Raspberry Pi / V4L2 hardware encoder — limit output buffers to
+      // reduce memory usage while keeping the pipeline fed.
+      args.push('-num_output_buffers', '16');
+    }
 
-  if (plan.subtitle != null) {
-    const escaped = escapeSubtitlePath(url);
-    filters.push(`subtitles=${escaped}:si=${plan.subtitle.streamIndex}`);
+    // All encoders (SW and HW) need pixel format
+    args.push('-pix_fmt', 'yuv420p');
+
+    // Build the video filter chain.
+    // Order: scale first (work on smaller frames), then burn subtitles.
+    const filters = [...plan.video.filters];
+
+    if (plan.subtitle != null) {
+      const escaped = escapeSubtitlePath(url);
+      filters.push(`subtitles=${escaped}:si=${plan.subtitle.streamIndex}`);
+    }
+
+    if (filters.length > 0) {
+      args.push('-vf', filters.join(','));
+    }
+
+    args.push(
+      '-r',
+      String(plan.video.targetFps),
+      '-b:v',
+      `${plan.video.targetBitrateKbps}k`,
+      '-maxrate:v',
+      `${plan.video.maxBitrateKbps}k`,
+      // 1:1 bufsize:target ratio ensures tight CBR for real-time RTP
+      // streaming.  A larger bufsize allows quality spikes that can
+      // overwhelm the receiver's jitter buffer.
+      '-bufsize:v',
+      `${plan.video.targetBitrateKbps}k`,
+      '-bf',
+      '0',
+      '-g', String(plan.video.targetFps),
+    );
   }
 
-  if (filters.length > 0) {
-    args.push('-vf', filters.join(','));
-  }
-
-  args.push(
-    '-r',
-    String(plan.video.targetFps),
-    '-b:v',
-    `${plan.video.targetBitrateKbps}k`,
-    '-maxrate:v',
-    `${plan.video.maxBitrateKbps}k`,
-    '-bufsize:v',
-    `${plan.video.targetBitrateKbps}k`,
-    '-bf',
-    '0',
-    '-force_key_frames',
-    'expr:gte(t,n_forced*1)'
-  );
-
+  // ── Audio codec ──────────────────────────────────────────────────────
   if (!plan.audio) {
-    args.push('-f', 'nut', 'pipe:1');
+    args.push(
+      '-max_delay', '0',
+      '-flush_packets', '1',
+      '-f', 'nut',
+      '-syncpoints', 'none',
+      '-write_index', '0',
+      'pipe:1',
+    );
     return args;
   }
 
@@ -154,11 +217,33 @@ export function buildFfmpegNutArgs(
       '-ar',
       String(plan.audio.targetSampleRate),
       '-b:a',
-      `${plan.audio.targetBitrateKbps}k`
+      `${plan.audio.targetBitrateKbps}k`,
+      // Opus tuning for real-time media streaming to Discord:
+      // - application audio: full-bandwidth mode optimised for music/general
+      //   audio rather than speech (voip) or low-delay modes.
+      // - vbr off: true CBR for consistent network behaviour and SRTP safety.
+      // - compression_level 5: balanced quality/CPU on ARM Cortex-A57.
+      // - frame_duration 20: explicit 20ms frames matching Discord's playback.
+      '-application', 'audio',
+      '-vbr', 'off',
+      '-compression_level', '5',
+      '-frame_duration', '20',
     );
   }
 
-  args.push('-f', 'nut', 'pipe:1');
+  // NUT muxer settings optimised for non-seekable pipe output:
+  // - flush_packets 1: flush each packet immediately for minimal latency.
+  // - syncpoints none: disables syncpoint overhead (stream is pipe, no seeking).
+  // - write_index 0: disables growing data tables for endless streaming.
+  // - max_delay 0 / muxdelay 0: eliminates muxer buffering.
+  args.push(
+    '-max_delay', '0',
+    '-flush_packets', '1',
+    '-f', 'nut',
+    '-syncpoints', 'none',
+    '-write_index', '0',
+    'pipe:1',
+  );
   return args;
 }
 
@@ -167,9 +252,10 @@ export function createFfmpegNutProcess(
   url: string,
   plan: TranscodePlan,
   audioUrl?: string,
-  httpHeaders?: Record<string, string>
+  httpHeaders?: Record<string, string>,
+  ffmpegMajorVersion?: number
 ): FfmpegNutProcess {
-  const args = buildFfmpegNutArgs(url, plan, audioUrl, httpHeaders);
+  const args = buildFfmpegNutArgs(url, plan, audioUrl, httpHeaders, ffmpegMajorVersion);
   const startedAt = performance.now();
   const child = spawn(ffmpegPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],

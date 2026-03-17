@@ -261,12 +261,25 @@ async function runStreamJob(
     // 3. Create streamer
     const streamer = yield* streamerService.create(gateway.client, dave, logger);
 
-    // 4. Probe media
-    logger.info('Probing media source', { url: videoUrl });
-    const probeResult = yield* media.probe(config.ffprobePath, videoUrl, httpHeaders);
+    // 4. Detect encoder
+    logger.info('Detecting video encoder', { preference: config.videoEncoder });
+    const encoderInfo = yield* media.detectEncoder(config.ffmpegPath, config.videoEncoder);
+    logger.info('Encoder detected', {
+      available: encoderInfo.available,
+      selected: encoderInfo.selected,
+    });
 
-    // 5. Select transcode plan
-    const plan = yield* media.selectPlan(probeResult);
+    // 5. Probe media
+    logger.info('Probing media source', { url: videoUrl });
+    const probeResult = yield* media.probe(config.ffprobePath, videoUrl, httpHeaders, encoderInfo.ffmpegMajorVersion);
+
+    // 6. Select transcode plan
+    const plan = yield* media.selectPlan(probeResult, {
+      encoder: encoderInfo.selected,
+      subtitleBurnIn: config.subtitleBurnIn,
+      performanceProfile: config.performanceProfile,
+      language: config.language,
+    });
 
     // When a separate audioUrl is provided (e.g. YouTube split streams),
     // the video URL has no audio track so ffprobe reports none.  Inject
@@ -286,22 +299,23 @@ async function runStreamJob(
 
     logger.info('Transcode plan selected', describeTranscodePlan(plan));
 
-    // 6. Join voice channel
+    // 7. Join voice channel
     logger.info('Joining voice channel', { guildId, channelId });
     yield* streamerService.joinVoice(streamer, guildId, channelId);
     logger.info('Voice channel joined');
 
-    // 7. Spawn FFmpeg
+    // 8. Spawn FFmpeg
     logger.info('Starting FFmpeg pipeline');
     const pipeline = yield* media.createPipeline(
       config.ffmpegPath,
       videoUrl,
       plan,
       audioUrl,
-      httpHeaders
+      httpHeaders,
+      encoderInfo.ffmpegMajorVersion
     );
 
-    // 8. Create Go Live stream and play
+    // 9. Create Go Live stream and play
     logger.info('Creating Go Live stream');
     const streamWebRtc = yield* streamerService.createStream(streamer);
 
@@ -325,7 +339,8 @@ async function runStreamJob(
       streamConnection,
       streamWebRtc,
       logger,
-      abortSignal
+      abortSignal,
+      plan.video.mode === 'transcode' ? plan.video.maxBitrateKbps : undefined
     );
 
     // Wait for FFmpeg to finish or handle its error
@@ -365,6 +380,10 @@ async function runStreamJob(
     ffprobePath: process.env['FFPROBE_PATH'] ?? 'ffprobe',
     stremioAddonUrl: process.env['STREMIO_ADDON_URL'] ?? '',
     ytdlpPath: process.env['YTDLP_PATH'] ?? 'yt-dlp',
+    videoEncoder: process.env['VIDEO_ENCODER'] ?? 'auto',
+    subtitleBurnIn: process.env['SUBTITLE_BURN_IN'] ?? 'auto',
+    performanceProfile: process.env['PERFORMANCE_PROFILE'] ?? 'default',
+    language: process.env['LANGUAGE'] ?? 'eng',
   });
 
   const loggerForGateway = createLogger(

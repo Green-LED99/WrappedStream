@@ -7,6 +7,7 @@ import { probeMedia, type FfprobeResult } from './Probe.js';
 import {
   selectTranscodePlan,
   type TranscodePlan,
+  type TranscodePlanOptions,
 } from './TranscodePlan.js';
 import {
   createFfmpegNutProcess,
@@ -15,6 +16,10 @@ import {
 import { demuxNutStream } from './Demuxer.js';
 import { VideoStream } from './VideoStream.js';
 import { AudioStream } from './AudioStream.js';
+import {
+  detectEncoder,
+  type EncoderCapabilities,
+} from './EncoderDetect.js';
 
 export class MediaService extends Context.Tag('MediaService')<
   MediaService,
@@ -22,50 +27,71 @@ export class MediaService extends Context.Tag('MediaService')<
     readonly probe: (
       ffprobePath: string,
       url: string,
-      httpHeaders?: Record<string, string>
+      httpHeaders?: Record<string, string>,
+      ffmpegMajorVersion?: number
     ) => Effect.Effect<FfprobeResult, MediaError>;
     readonly selectPlan: (
-      probe: FfprobeResult
+      probe: FfprobeResult,
+      options: TranscodePlanOptions
     ) => Effect.Effect<TranscodePlan, MediaError>;
+    readonly detectEncoder: (
+      ffmpegPath: string,
+      preference: string
+    ) => Effect.Effect<EncoderCapabilities, MediaError>;
     readonly createPipeline: (
       ffmpegPath: string,
       url: string,
       plan: TranscodePlan,
       audioUrl?: string,
-      httpHeaders?: Record<string, string>
+      httpHeaders?: Record<string, string>,
+      ffmpegMajorVersion?: number
     ) => Effect.Effect<FfmpegNutProcess, MediaError>;
     readonly playStream: (
       input: NodeJS.ReadableStream,
       connection: BaseMediaConnection,
       webRtc: WebRtcConnection,
       logger: Logger,
-      abortSignal?: AbortSignal
+      abortSignal?: AbortSignal,
+      maxBitrateKbps?: number
     ) => Effect.Effect<void, MediaError>;
   }
 >() {}
 
 export const MediaServiceLive = Layer.succeed(MediaService, {
-  probe: (ffprobePath: string, url: string, httpHeaders?: Record<string, string>) =>
+  probe: (ffprobePath: string, url: string, httpHeaders?: Record<string, string>, ffmpegMajorVersion?: number) =>
     Effect.tryPromise({
-      try: () => probeMedia(ffprobePath, url, httpHeaders),
+      try: () => probeMedia(ffprobePath, url, httpHeaders, ffmpegMajorVersion),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),
         }),
     }),
 
-  selectPlan: (probeResult: FfprobeResult) =>
+  selectPlan: (probeResult: FfprobeResult, options: TranscodePlanOptions) =>
     Effect.try({
-      try: () => selectTranscodePlan(probeResult),
+      try: () => selectTranscodePlan(probeResult, options),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),
         }),
     }),
 
-  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string, httpHeaders?: Record<string, string>) =>
+  detectEncoder: (ffmpegPath: string, preference: string) =>
+    Effect.tryPromise({
+      try: () =>
+        detectEncoder(
+          ffmpegPath,
+          preference as 'auto' | 'h264_nvmpi' | 'h264_v4l2m2m' | 'libx264'
+        ),
+      catch: (error) =>
+        new MediaError({
+          message: error instanceof Error ? error.message : String(error),
+        }),
+    }),
+
+  createPipeline: (ffmpegPath: string, url: string, plan: TranscodePlan, audioUrl?: string, httpHeaders?: Record<string, string>, ffmpegMajorVersion?: number) =>
     Effect.try({
-      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl, httpHeaders),
+      try: () => createFfmpegNutProcess(ffmpegPath, url, plan, audioUrl, httpHeaders, ffmpegMajorVersion),
       catch: (error) =>
         new MediaError({
           message: error instanceof Error ? error.message : String(error),
@@ -77,7 +103,8 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
     connection: BaseMediaConnection,
     webRtc: WebRtcConnection,
     logger: Logger,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    maxBitrateKbps?: number
   ) =>
     Effect.tryPromise({
       try: async () => {
@@ -91,6 +118,7 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           width: video.width,
           height: video.height,
           fps: Math.round(video.framerateNum / video.framerateDen),
+          ...(maxBitrateKbps != null ? { maxBitrateKbps } : {}),
         });
 
         const videoStream = new VideoStream(webRtc);
@@ -101,6 +129,10 @@ export const MediaServiceLive = Layer.succeed(MediaService, {
           audioStream.syncStream = undefined;
           audio.stream.pipe(audioStream);
         }
+
+        videoStream.on('stats', (stats) => {
+          logger.debug('Video pipeline stats', stats);
+        });
 
         video.stream.pipe(videoStream);
 
