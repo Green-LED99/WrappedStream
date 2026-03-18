@@ -84,6 +84,18 @@ export class PlaybackStateManager {
   }
 
   /**
+   * Find any active session in a guild, regardless of channel.
+   * Useful when a slash command arrives from a text channel but the
+   * session is keyed to the voice channel.
+   */
+  getSessionByGuild(guildId: string): PlaybackSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.guildId === guildId) return session;
+    }
+    return undefined;
+  }
+
+  /**
    * Estimated playback position in seconds, clamped to [0, duration].
    */
   getPosition(guildId: string, channelId: string): number {

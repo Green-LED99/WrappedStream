@@ -135,17 +135,20 @@ export class CommandServer {
 
   private async handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const guildId = interaction.guildId;
-    const channelId = interaction.channelId;
-    if (!guildId || !channelId) {
-      await interaction.reply({ content: 'Could not determine guild or channel.', flags: MessageFlags.Ephemeral });
+    if (!guildId) {
+      await interaction.reply({ content: 'Could not determine guild.', flags: MessageFlags.Ephemeral });
       return;
     }
 
-    const session = this.state.getSession(guildId, channelId);
+    // Look up by guild — the slash command may come from a text channel
+    // while the session is keyed to the voice channel.
+    const session = this.state.getSessionByGuild(guildId);
     if (!session) {
-      await interaction.reply({ content: 'No active stream in this channel.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'No active stream in this server.', flags: MessageFlags.Ephemeral });
       return;
     }
+
+    const channelId = session.channelId;
 
     switch (interaction.commandName) {
       case 'playtime':
