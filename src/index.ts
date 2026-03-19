@@ -54,7 +54,7 @@ program
 // ─── play-url-with-commands ──────────────────────────────────────────
 program
   .command('play-url-with-commands')
-  .description('Stream a video URL with Discord slash command controls (/skip-forward, /skip-backward, /seek, /playtime)')
+  .description('Stream a video URL with Discord slash command controls (/skip-forward, /skip-backward, /seek, /playtime, /next-episode)')
   .requiredOption('--guild-id <id>', 'Discord guild (server) ID')
   .requiredOption('--channel-id <id>', 'Discord voice channel ID')
   .requiredOption('--url <url>', 'Direct video URL (mp4/mkv)')
@@ -97,6 +97,7 @@ program
   .option('--season <number>', 'Season number (required for series)', parseInt)
   .option('--episode <number>', 'Episode number (required for series)', parseInt)
   .option('--no-auto-play', 'Disable auto-play next episode for series')
+  .option('--bot-token <token>', 'Discord bot token for slash commands (/skip-forward, /skip-backward, /seek, /playtime, /next-episode)')
   .option('--json', 'Output structured JSON logs', false)
   .action(async (options: {
     guildId: string;
@@ -106,6 +107,7 @@ program
     season?: number;
     episode?: number;
     autoPlay: boolean;
+    botToken?: string;
     json: boolean;
   }) => {
     await withSignalHandler(async (signal) => {
@@ -140,87 +142,111 @@ program
         }, logger)
       );
 
-      // ── Episode auto-play loop ───────────────────────────────────
-      // For series content, automatically advance to the next episode
-      // when the current one finishes.  Disable with --no-auto-play.
-      let currentSeason = resolved.season;
-      let currentEpisode = resolved.episode;
+      // ── Optional slash command server ──────────────────────────────
+      // When --bot-token is provided, start a CommandServer so users
+      // can control playback with /skip-forward, /seek, /next-episode, etc.
+      const playbackState = options.botToken ? new PlaybackStateManager() : undefined;
+      let commandServer: CommandServer | undefined;
 
-      while (!signal.aborted) {
-        logger.info('Resolved content for streaming', {
-          name: resolved.contentName,
-          imdbId: resolved.imdbId,
-          quality: resolved.quality,
-          filename: resolved.filename,
-          ...(currentSeason != null ? { season: currentSeason, episode: currentEpisode } : {}),
-        });
-
-        await runStreamJob({
+      if (options.botToken && playbackState) {
+        commandServer = new CommandServer({
+          botToken: options.botToken,
           guildId: options.guildId,
-          channelId: options.channelId,
-          videoUrl: resolved.streamUrl,
-          abortSignal: signal,
+          logger,
+          playbackState,
         });
+        await commandServer.start();
+        logger.info('Slash command server started — /skip-forward, /skip-backward, /seek, /playtime, /next-episode available');
+      }
 
-        // Check if we should auto-play the next episode.
-        if (signal.aborted) break;
-        if (!options.autoPlay) break;
-        if (resolved.contentType !== 'series') break;
-        if (currentSeason == null || currentEpisode == null) break;
-        if (!resolved.addonBase) break;
+      try {
+        // ── Episode auto-play loop ───────────────────────────────────
+        // For series content, automatically advance to the next episode
+        // when the current one finishes.  Disable with --no-auto-play.
+        let currentSeason = resolved.season;
+        let currentEpisode = resolved.episode;
 
-        // Fetch series metadata and find the next episode.
-        logger.info('Looking up next episode', {
-          currentSeason,
-          currentEpisode,
-        });
+        while (!signal.aborted) {
+          logger.info('Resolved content for streaming', {
+            name: resolved.contentName,
+            imdbId: resolved.imdbId,
+            quality: resolved.quality,
+            filename: resolved.filename,
+            ...(currentSeason != null ? { season: currentSeason, episode: currentEpisode } : {}),
+          });
 
-        const meta = await Effect.runPromise(
-          fetchSeriesMeta(resolved.imdbId)
-        );
-        const next = getNextEpisode(
-          meta.meta.videos ?? [],
-          currentSeason,
-          currentEpisode
-        );
+          await runStreamJob({
+            guildId: options.guildId,
+            channelId: options.channelId,
+            videoUrl: resolved.streamUrl,
+            abortSignal: signal,
+            playbackState,
+          });
 
-        if (!next) {
-          logger.info('No more episodes — series complete');
-          break;
+          // Check if we should auto-play the next episode.
+          if (signal.aborted) break;
+          if (!options.autoPlay) break;
+          if (resolved.contentType !== 'series') break;
+          if (currentSeason == null || currentEpisode == null) break;
+          if (!resolved.addonBase) break;
+
+          // Fetch series metadata and find the next episode.
+          logger.info('Looking up next episode', {
+            currentSeason,
+            currentEpisode,
+          });
+
+          const meta = await Effect.runPromise(
+            fetchSeriesMeta(resolved.imdbId)
+          );
+          const next = getNextEpisode(
+            meta.meta.videos ?? [],
+            currentSeason,
+            currentEpisode
+          );
+
+          if (!next) {
+            logger.info('No more episodes — series complete');
+            break;
+          }
+
+          logger.info('Auto-playing next episode', {
+            season: next.season,
+            episode: next.episode,
+          });
+
+          currentSeason = next.season;
+          currentEpisode = next.episode;
+
+          // Resolve the next episode's stream URL.
+          // Save fields that resolveContent doesn't set so the loop
+          // can continue beyond the second episode.
+          const savedAddonBase = resolved.addonBase;
+          const savedImdbId = resolved.imdbId;
+          const savedContentName = resolved.contentName;
+          const savedContentType = resolved.contentType;
+
+          resolved = await Effect.runPromise(
+            resolveContent(
+              savedAddonBase,
+              'series',
+              savedImdbId,
+              savedContentName,
+              next.season,
+              next.episode
+            )
+          );
+          resolved.season = next.season;
+          resolved.episode = next.episode;
+          resolved.addonBase = savedAddonBase;
+          resolved.imdbId = savedImdbId;
+          resolved.contentName = savedContentName;
+          resolved.contentType = savedContentType;
         }
-
-        logger.info('Auto-playing next episode', {
-          season: next.season,
-          episode: next.episode,
-        });
-
-        currentSeason = next.season;
-        currentEpisode = next.episode;
-
-        // Resolve the next episode's stream URL.
-        // Save fields that resolveContent doesn't set so the loop
-        // can continue beyond the second episode.
-        const savedAddonBase = resolved.addonBase;
-        const savedImdbId = resolved.imdbId;
-        const savedContentName = resolved.contentName;
-        const savedContentType = resolved.contentType;
-
-        resolved = await Effect.runPromise(
-          resolveContent(
-            savedAddonBase,
-            'series',
-            savedImdbId,
-            savedContentName,
-            next.season,
-            next.episode
-          )
-        );
-        resolved.season = next.season;
-        resolved.episode = next.episode;
-        resolved.addonBase = savedAddonBase;
-        resolved.imdbId = savedImdbId;
-        resolved.contentName = savedContentName;
-        resolved.contentType = savedContentType;
+      } finally {
+        if (commandServer) {
+          await commandServer.stop();
+        }
       }
     });
   });
@@ -633,7 +659,7 @@ async function runStreamJobWithCommands(
 
   try {
     await commandServer.start();
-    logger.info('Slash command server started — /skip-forward, /skip-backward, /seek, /playtime available');
+    logger.info('Slash command server started — /skip-forward, /skip-backward, /seek, /playtime, /next-episode available');
 
     await runStreamJob({ ...opts, playbackState });
   } finally {
